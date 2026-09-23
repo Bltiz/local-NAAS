@@ -2,6 +2,9 @@
   "name": "local-nas",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "main": "electron.js",
   "scripts": {
     "dev": "next dev -p 43214 -H 0.0.0.0",
