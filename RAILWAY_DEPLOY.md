@@ -1,165 +1,51 @@
-# Railway Deployment Guide
+# Deploying to Railway
 
-Deploy your Local NAS file transfer system to Railway for 24/7 access from anywhere!
+Railway runs the app 24/7 and gives it a public HTTPS address. Files are stored on a Railway volume.
 
-## Option 1: Quick Deploy (Ephemeral Storage)
+## 1. Deploy from GitHub
 
-Files will be lost on restart, but it's free and easy to set up.
+1. Push this repository to GitHub.
+2. On [railway.app](https://railway.app), choose **New Project → Deploy from GitHub repo** and pick the repository.
+3. Railway builds with Node 22 (pinned in `package.json`, `.nvmrc`, and `nixpacks.toml`) and starts the app with `npm start`.
 
-### Steps:
+## 2. Add a volume
 
-1. **Push to GitHub** (if not already done):
-   ```bash
-   git remote add github https://github.com/yourusername/local-nas.git
-   git push github main
-   ```
+Without a volume, every restart or redeploy wipes uploaded files.
 
-2. **Deploy to Railway**:
-   - Go to [railway.app](https://railway.app)
-   - Click "New Project"
-   - Select "Deploy from GitHub repo"
-   - Choose this repository
-   - Railway will auto-detect Next.js and deploy!
+1. Right-click the project canvas → **Volume**, and attach it to the service.
+2. Set the mount path to `/data`.
 
-3. **Set a password** (required):
-   - In your Railway service, open **Variables**
-   - Add `NAS_PASSWORD` with a long password of your choice
-   - Until this is set, the site shows a "No password is set" notice and all files stay locked
+## 3. Set variables on the service
 
-4. **Access Your App**:
-   - Under **Settings → Networking**, click **Generate Domain**
-   - Open the URL and sign in with your `NAS_PASSWORD`
-   - Changing `NAS_PASSWORD` later signs out every device
+Open the service → **Variables** (not the project's *Shared Variables*, unless you also share them with the service):
 
-### Limitations:
-- Files are deleted when the app restarts or redeploys (unless you add a Volume, below)
-- Railway has no permanent free tier: new accounts get trial credit, then the Hobby plan is about $5/month
+| Variable | Value |
+| --- | --- |
+| `NAS_PASSWORD` | A long password. Required: without it the site shows "No password is set" and stays locked. |
+| `UPLOAD_DIR` | `/data` |
 
-### Keeping files with a Railway Volume (simplest)
+Click **Deploy** on the "Apply changes" banner so the variables take effect.
 
-1. In your Railway service, right-click → **Attach Volume**, mount path `/data`
-2. Under **Variables**, add `UPLOAD_DIR=/data`
-3. Redeploy. Uploaded files now survive restarts.
+## 4. Get your address
 
-## Option 2: Persistent Storage with S3
+**Settings → Networking → Generate Domain.** Open it, sign in, and install it as an app from your browser if you like.
 
-Files persist forever using Amazon S3.
+## Updating
 
-### Prerequisites:
+Push to GitHub and Railway redeploys automatically. Files on the volume are kept.
 
-1. **Create an AWS S3 Bucket**:
-   - Go to [AWS S3 Console](https://console.aws.amazon.com/s3)
-   - Click "Create bucket"
-   - Name it (e.g., `my-nas-files`)
-   - Choose a region (e.g., `us-east-1`)
-   - Keep default settings and create
+## Notes
 
-2. **Create IAM Access Keys**:
-   - Go to [IAM Console](https://console.aws.amazon.com/iam)
-   - Users → Add users → Create programmatic access
-   - Attach policy: `AmazonS3FullAccess`
-   - Save the Access Key ID and Secret Access Key
-
-### Deploy to Railway with S3:
-
-1. **Deploy as in Option 1** first
-
-2. **Add Environment Variables** in Railway:
-   - Go to your Railway project
-   - Click "Variables"
-   - Add these variables:
-     ```
-     USE_S3=true
-     S3_BUCKET_NAME=your-bucket-name
-     S3_REGION=us-east-1
-     S3_ACCESS_KEY_ID=your-access-key-id
-     S3_SECRET_ACCESS_KEY=your-secret-access-key
-     ```
-
-3. **Redeploy**:
-   - Railway will automatically redeploy with new config
-   - Files now persist in S3!
-
-### S3 Costs:
-- First 5GB: Free
-- Storage: ~$0.023/GB per month
-- Transfers: Minimal for personal use
-- Estimated: <$1/month for typical use
-
-## Option 3: Local + Railway Hybrid
-
-Run locally for private file transfers, use Railway for remote access.
-
-### Setup:
-
-1. **Local (for home network)**:
-   ```bash
-   npm run dev
-   ```
-   Access at `http://your-local-ip:43214`
-
-2. **Railway (for internet access)**:
-   Deploy with S3 as described above
-   Access at `https://your-app.railway.app`
-
-## Desktop App (Coming Soon)
-
-Turn this into a standalone desktop app with Electron.
-
-### Features:
-- System tray icon
-- Auto-start with computer
-- No terminal needed
-- Bundled with Node.js
-
-Want me to create the desktop app version? Let me know!
+- **Cost:** new accounts get trial credit; after that the Hobby plan is about $5/month, plus volume storage.
+- **Single instance:** direct-transfer signaling lives in server memory, so keep the service at one replica.
+- **Direct transfers don't use Railway bandwidth.** Only the small connection messages go through the server; file bytes flow device to device.
+- **Sign-in protection:** after 5 wrong passwords from one IP, sign-in is blocked for 15 minutes. Changing `NAS_PASSWORD` signs out every device.
 
 ## Troubleshooting
 
-### Railway Build Fails
-```bash
-# Make sure package.json is correct
-npm run build
-```
-
-### S3 Upload Fails
-- Check AWS credentials are correct
-- Verify bucket name matches
-- Ensure IAM user has S3 permissions
-
-### App Won't Start
-- Check Railway logs: Project → Deployments → View logs
-- Verify all environment variables are set
-
-## Security Recommendations
-
-### For Railway Deployment:
-
-1. **Password protection** is built in: set `NAS_PASSWORD` (see step 3 above).
-   After 5 wrong attempts from one IP, sign-in is blocked for 15 minutes.
-
-2. **Set Upload Limits**:
-   - Add file size limits in API routes
-   - Prevent abuse with rate limiting
-
-3. **Use Private Bucket** (if using S3):
-   - Keep bucket private
-   - Use presigned URLs (already implemented)
-
-## Cost Comparison
-
-| Option | Monthly Cost | Persistent? | Speed |
-|--------|-------------|-------------|-------|
-| Local Only | $0 | Yes | Fastest |
-| Railway (ephemeral) | $0 (free tier) | No | Fast |
-| Railway + S3 | <$1 | Yes | Fast |
-| Railway Volumes | $5-10 | Yes | Fastest |
-
-## Next Steps
-
-1. Choose your deployment option
-2. Follow the setup steps above
-3. Test by uploading a file
-4. Share the URL with your devices
-
-Need help with any step? Just ask!
+| Symptom | Fix |
+| --- | --- |
+| Build log says `Node.js version ">=20.9.0" is required` | Make sure the latest code (with the Node 22 pin) is pushed, and the service's builder is Nixpacks. |
+| Site says "No password is set" | `NAS_PASSWORD` isn't set on the service itself, or the change wasn't deployed. |
+| Files disappear after a redeploy | The volume isn't attached at `/data`, or `UPLOAD_DIR` isn't `/data`. |
+| "Send directly" never connects | One of the networks blocks direct WebRTC connections. Use a cloud upload instead. |
