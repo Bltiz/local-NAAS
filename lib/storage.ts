@@ -8,6 +8,7 @@ export const SYSTEM_DIR = '.nas-system';
 const MAX_CHUNK_BYTES = 64 * 1024 * 1024 + 1024;
 const STALE_PART_MS = 7 * 24 * 60 * 60 * 1000;
 export const TRASH_DAYS = 30;
+const MAX_VERSIONS = 20;
 
 export interface Entry {
   path: string;
@@ -234,6 +235,29 @@ async function folderSize(rel: string): Promise<number> {
   return total;
 }
 
+const gt = globalThis as unknown as { __nasTrash?: TrashItem[] | null };
+
+async function trashItems(): Promise<TrashItem[]> {
+  if (gt.__nasTrash) return gt.__nasTrash;
+  const ids = await readdir(trashDir()).catch(() => [] as string[]);
+  const items = await Promise.all(
+    ids.map(async (id) => {
+      try {
+        return JSON.parse(await readFile(join(trashDir(), id, 'meta.json'), 'utf8')) as TrashItem;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  gt.__nasTrash = items.filter((i): i is TrashItem => i !== null);
+  return gt.__nasTrash;
+}
+
+async function dropTrashItem(id: string) {
+  await rm(join(trashDir(), id), { recursive: true, force: true });
+  if (gt.__nasTrash) gt.__nasTrash = gt.__nasTrash.filter((i) => i.id !== id);
+}
+
 export async function moveToTrash(relPath: string, reason: TrashItem['reason'] = 'deleted'): Promise<string> {
   const rel = normalizeRelPath(relPath);
   const abs = absolutePath(rel);
@@ -253,27 +277,51 @@ export async function moveToTrash(relPath: string, reason: TrashItem['reason'] =
   await rename(abs, join(dir, 'data'));
   await writeFile(join(dir, 'meta.json'), JSON.stringify(item));
   indexRemove(rel);
+  const all = await trashItems();
+  if (!all.some((i) => i.id === id)) all.push(item);
+  if (reason === 'replaced') {
+    const versions = all.filter((i) => i.reason === 'replaced' && i.path === rel).sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+    for (const old of versions.slice(MAX_VERSIONS)) await dropTrashItem(old.id);
+  }
   return id;
 }
 
 export async function listTrash(): Promise<TrashItem[]> {
-  const ids = await readdir(trashDir()).catch(() => [] as string[]);
   const cutoff = Date.now() - TRASH_DAYS * 24 * 60 * 60 * 1000;
-  const items = await Promise.all(
-    ids.map(async (id) => {
-      try {
-        const item = JSON.parse(await readFile(join(trashDir(), id, 'meta.json'), 'utf8')) as TrashItem;
-        if (new Date(item.deletedAt).getTime() < cutoff) {
-          await rm(join(trashDir(), id), { recursive: true, force: true });
-          return null;
-        }
-        return item;
-      } catch {
-        return null;
-      }
-    }),
-  );
-  return items.filter((i): i is TrashItem => i !== null).sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+  for (const item of [...(await trashItems())]) {
+    if (new Date(item.deletedAt).getTime() < cutoff) await dropTrashItem(item.id);
+  }
+  return [...(await trashItems())].sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+}
+
+export async function getTrashItem(id: string): Promise<TrashItem> {
+  trashItemDir(id);
+  const item = (await trashItems()).find((i) => i.id === id);
+  if (!item) throw new StorageError('Not found in trash', 404);
+  return item;
+}
+
+export async function listVersions(relPath: string): Promise<TrashItem[]> {
+  const rel = normalizeRelPath(relPath);
+  return (await listTrash()).filter((i) => i.reason === 'replaced' && i.path === rel);
+}
+
+// Puts an old version back; the current file becomes a version itself.
+export async function restoreVersion(id: string): Promise<string> {
+  const item = await getTrashItem(id);
+  if (item.reason !== 'replaced' || item.type !== 'file') throw new StorageError('Not a file version', 400);
+  const abs = absolutePath(item.path);
+  if (await statOrNull(abs)) await moveToTrash(item.path, 'replaced');
+  await mkdir(dirname(abs), { recursive: true });
+  await rename(join(trashItemDir(id), 'data'), abs);
+  await dropTrashItem(id);
+  const s = await stat(abs);
+  indexPut({ path: item.path, type: 'file', size: s.size, modified: s.mtime.toISOString() });
+  return item.path;
+}
+
+export function trashDataPath(id: string): string {
+  return join(trashItemDir(id), 'data');
 }
 
 function trashItemDir(id: string): string {
@@ -282,25 +330,26 @@ function trashItemDir(id: string): string {
 }
 
 export async function restoreFromTrash(id: string): Promise<string> {
-  const dir = trashItemDir(id);
-  const item = JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8').catch(() => {
-    throw new StorageError('Not found in trash', 404);
-  })) as TrashItem;
+  const item = await getTrashItem(id);
   const target = await uniquePath(item.path);
   const abs = absolutePath(target);
   await mkdir(dirname(abs), { recursive: true });
-  await rename(join(dir, 'data'), abs);
-  await rm(dir, { recursive: true, force: true });
+  await rename(join(trashItemDir(id), 'data'), abs);
+  await dropTrashItem(id);
   index.dirty = true;
   return target;
 }
 
-export async function deleteFromTrash(id: string | 'all'): Promise<void> {
-  if (id === 'all') {
+export async function deleteFromTrash(ids: string[] | 'all'): Promise<void> {
+  if (ids === 'all') {
     await rm(trashDir(), { recursive: true, force: true });
+    gt.__nasTrash = [];
     return;
   }
-  await rm(trashItemDir(id), { recursive: true, force: true });
+  for (const id of ids) {
+    trashItemDir(id);
+    await dropTrashItem(id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +523,10 @@ const MAX_BATCH_FILES = 2000;
 const MAX_BATCH_BYTES = 64 * 1024 * 1024;
 
 // Body layout: u32 manifest length | manifest JSON | each file's bytes in order.
-export async function writeBatch(body: ReadableStream<Uint8Array> | null): Promise<BatchResult[]> {
+export async function writeBatch(
+  body: ReadableStream<Uint8Array> | null,
+  toReal: (path: string) => string = normalizeRelPath,
+): Promise<BatchResult[]> {
   if (!body) throw new StorageError('Empty upload', 400);
   const reader = new BodyReader(body.getReader());
   const head = await reader.readExact(4);
@@ -493,7 +545,7 @@ export async function writeBatch(body: ReadableStream<Uint8Array> | null): Promi
     let valid = Number.isSafeInteger(size) && size >= 0;
     let relPath = '';
     try {
-      relPath = normalizeRelPath(file.path);
+      relPath = toReal(file.path);
     } catch {
       valid = false;
     }
@@ -589,6 +641,6 @@ export async function fileSize(relPath: string): Promise<number> {
   return s.size;
 }
 
-export async function trashBytes(): Promise<number> {
-  return (await listTrash()).reduce((a, i) => a + i.size, 0);
+export async function trashBytes(filter: (path: string) => boolean = () => true): Promise<number> {
+  return (await listTrash()).filter((i) => filter(i.path)).reduce((a, i) => a + i.size, 0);
 }

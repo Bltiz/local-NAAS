@@ -6,7 +6,9 @@ import { isAuthorized } from '@/lib/auth';
 // bypass the proxy because it buffers request bodies (capped at 10MB), which
 // would truncate upload chunks.
 export async function proxy(request: NextRequest) {
-  if (request.nextUrl.pathname === '/login') return NextResponse.next();
+  const { pathname } = request.nextUrl;
+  // Share links are public pages; their API checks the link itself.
+  if (pathname === '/login' || pathname.startsWith('/s/')) return NextResponse.next();
   if (await isAuthorized(request)) return NextResponse.next();
   return NextResponse.redirect(new URL('/login', request.url));
 }

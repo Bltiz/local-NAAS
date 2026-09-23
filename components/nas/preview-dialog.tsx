@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { formatBytes } from '@/components/nas/format';
 import type { EncryptionSession } from '@/lib/client/crypto';
-import { type FileEntry, displayName, displaySize, downloadUrl, isEncrypted, readAsBlob } from '@/lib/client/download';
+import { type FileEntry, type FileSource, displayName, displaySize, isEncrypted, nasSource, readAsBlob } from '@/lib/client/download';
 import { mimeTypeOf, previewKindOf } from '@/lib/file-types';
 
 const TEXT_LIMIT = 1024 * 1024;
@@ -26,9 +26,10 @@ interface Props {
   onClose: () => void;
   onDownload: (entry: FileEntry) => void;
   onUnlock: () => void;
+  source?: FileSource;
 }
 
-export function PreviewDialog({ entry, session, onClose, onDownload, onUnlock }: Props) {
+export function PreviewDialog({ entry, session, onClose, onDownload, onUnlock, source = nasSource }: Props) {
   const [content, setContent] = useState<Content>({ state: 'loading' });
 
   useEffect(() => {
@@ -52,19 +53,19 @@ export function PreviewDialog({ entry, session, onClose, onDownload, onUnlock }:
           let text: string;
           let truncated = false;
           if (encrypted) {
-            const blob = await readAsBlob(entry, session, 'text/plain');
+            const blob = await readAsBlob(entry, session, 'text/plain', source);
             truncated = blob.size > TEXT_LIMIT;
             text = await blob.slice(0, TEXT_LIMIT).text();
           } else {
-            const res = await fetch(downloadUrl(entry.path, true), { headers: { Range: `bytes=0-${TEXT_LIMIT - 1}` } });
+            const res = await fetch(source.url(entry.path, true), { headers: { Range: `bytes=0-${TEXT_LIMIT - 1}` } });
             if (!res.ok) throw new Error(`Could not load file (${res.status})`);
             text = await res.text();
             truncated = entry.size > TEXT_LIMIT;
           }
           return set({ state: 'text', text, truncated });
         }
-        if (!encrypted && kind !== 'pdf') return set({ state: 'media', url: downloadUrl(entry.path, true) });
-        const blob = await readAsBlob(entry, session, mimeTypeOf(name));
+        if (!encrypted && kind !== 'pdf') return set({ state: 'media', url: source.url(entry.path, true) });
+        const blob = await readAsBlob(entry, session, mimeTypeOf(name), source);
         if (canceled) return;
         objectUrl = URL.createObjectURL(blob);
         set({ state: 'media', url: objectUrl });
@@ -77,7 +78,7 @@ export function PreviewDialog({ entry, session, onClose, onDownload, onUnlock }:
       canceled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [entry, session]);
+  }, [entry, session, source]);
 
   const name = entry ? displayName(entry.path) : '';
   const kind = previewKindOf(name);
@@ -91,7 +92,7 @@ export function PreviewDialog({ entry, session, onClose, onDownload, onUnlock }:
             <span className="truncate">{name}</span>
           </DialogTitle>
           <DialogDescription className="truncate">
-            {entry && `${formatBytes(displaySize(entry))} · ${entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : 'All files'}`}
+            {entry && `${formatBytes(displaySize(entry))}${entry.path.includes('/') ? ` · ${entry.path.slice(0, entry.path.lastIndexOf('/'))}` : ''}`}
           </DialogDescription>
         </DialogHeader>
 

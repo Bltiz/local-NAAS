@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { checkPassword, getAuthMode, sessionToken, SESSION_COOKIE, SESSION_MAX_AGE } from '@/lib/auth';
+import { checkPassword, getAuthMode, sessionToken, SESSION_COOKIE, SESSION_MAX_AGE, userToken } from '@/lib/auth';
+import { authenticateUser } from '@/lib/users';
+import { credentialVersion } from '@/lib/viewer';
 
 const MAX_FAILURES = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
@@ -33,15 +35,25 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { password } = await request.json().catch(() => ({ password: '' }));
-  if (typeof password !== 'string' || !(await checkPassword(password))) {
+  const { username, password } = await request.json().catch(() => ({ username: '', password: '' }));
+  const name = typeof username === 'string' ? username.trim().toLowerCase() : '';
+  let token: string | null = null;
+  if (typeof password === 'string') {
+    if (!name || name === 'admin') {
+      if (await checkPassword(password)) token = await sessionToken();
+    } else {
+      const user = await authenticateUser(name, password);
+      if (user) token = await userToken(user.id, credentialVersion(user));
+    }
+  }
+  if (!token) {
     failures.set(ip, { count: (current?.count ?? 0) + 1, firstAt: current?.firstAt ?? Date.now() });
-    return NextResponse.json({ error: 'Incorrect password' }, { status: 401 });
+    return NextResponse.json({ error: name && name !== 'admin' ? 'Wrong username or password' : 'Incorrect password' }, { status: 401 });
   }
 
   failures.delete(ip);
   const response = NextResponse.json({ success: true });
-  response.cookies.set(SESSION_COOKIE, await sessionToken(), {
+  response.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
     secure: request.nextUrl.protocol === 'https:' || request.headers.get('x-forwarded-proto') === 'https',

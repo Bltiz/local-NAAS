@@ -33,16 +33,28 @@ export function displaySize(entry: FileEntry): number {
 export const downloadUrl = (path: string, inline = false) =>
   `/api/download?path=${encodeURIComponent(path)}${inline ? '&inline=1' : ''}`;
 
+// Where file bytes come from: the signed-in NAS, or a public share link.
+export interface FileSource {
+  url: (path: string, inline?: boolean) => string;
+  onUnauthorized?: () => void;
+}
+
+export const nasSource: FileSource = {
+  url: downloadUrl,
+  onUnauthorized: () => window.location.replace('/login'),
+};
+
 export class NeedsPassphraseError extends Error {
   constructor() {
     super('Unlock encrypted files first.');
   }
 }
 
-async function openStream(entry: FileEntry, session: EncryptionSession | null): Promise<ReadableStream<Uint8Array>> {
-  const res = await fetch(downloadUrl(entry.path));
+async function openStream(entry: FileEntry, session: EncryptionSession | null, source: FileSource): Promise<ReadableStream<Uint8Array>> {
+  if (isEncrypted(entry.path) && !session) throw new NeedsPassphraseError();
+  const res = await fetch(source.url(entry.path));
   if (res.status === 401) {
-    window.location.replace('/login');
+    source.onUnauthorized?.();
     throw new Error('Signed out');
   }
   if (!res.ok || !res.body) throw new Error(`Download failed (${res.status})`);
@@ -61,10 +73,10 @@ function triggerDownload(href: string, name: string) {
   a.remove();
 }
 
-export async function downloadFile(entry: FileEntry, session: EncryptionSession | null): Promise<void> {
+export async function downloadFile(entry: FileEntry, session: EncryptionSession | null, source: FileSource = nasSource): Promise<void> {
   const name = displayName(entry.path);
   if (!isEncrypted(entry.path)) {
-    triggerDownload(downloadUrl(entry.path), name);
+    triggerDownload(source.url(entry.path), name);
     return;
   }
   if (!session) throw new NeedsPassphraseError();
@@ -77,17 +89,22 @@ export async function downloadFile(entry: FileEntry, session: EncryptionSession 
       return;
     }
     const writable = await handle.createWritable();
-    await (await openStream(entry, session)).pipeTo(writable);
+    await (await openStream(entry, session, source)).pipeTo(writable);
     return;
   }
-  const blob = await new Response(await openStream(entry, session)).blob();
+  const blob = await new Response(await openStream(entry, session, source)).blob();
   const url = URL.createObjectURL(blob);
   triggerDownload(url, name);
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-export async function readAsBlob(entry: FileEntry, session: EncryptionSession | null, type: string): Promise<Blob> {
-  const blob = await new Response(await openStream(entry, session)).blob();
+export async function readAsBlob(
+  entry: FileEntry,
+  session: EncryptionSession | null,
+  type: string,
+  source: FileSource = nasSource,
+): Promise<Blob> {
+  const blob = await new Response(await openStream(entry, session, source)).blob();
   return new Blob([blob], { type });
 }
 
@@ -97,8 +114,11 @@ export async function downloadFolder(
   entries: FileEntry[],
   session: EncryptionSession | null,
   onProgress: (done: number, total: number) => void,
+  source: FileSource = nasSource,
+  rootName?: string,
 ): Promise<'saved' | 'fallback' | 'canceled'> {
-  const prefix = `${folderPath}/`;
+  // An empty folderPath means "everything in entries" (used for shared folders).
+  const prefix = folderPath ? `${folderPath}/` : '';
   const files = entries.filter((e) => e.type === 'file' && e.path.startsWith(prefix));
   const dirs = entries.filter((e) => e.type === 'dir' && e.path.startsWith(prefix));
   if (files.some((f) => isEncrypted(f.path)) && !session) throw new NeedsPassphraseError();
@@ -106,7 +126,7 @@ export async function downloadFolder(
   const picker = pickerWindow().showDirectoryPicker;
   if (!picker) {
     for (const [i, f] of files.entries()) {
-      await downloadFile(f, session);
+      await downloadFile(f, session, source);
       onProgress(i + 1, files.length);
       await new Promise((r) => setTimeout(r, 250));
     }
@@ -119,7 +139,7 @@ export async function downloadFolder(
   } catch {
     return 'canceled';
   }
-  const top = await root.getDirectoryHandle(displayName(folderPath), { create: true });
+  const top = await root.getDirectoryHandle(rootName ?? displayName(folderPath), { create: true });
   const dirCache = new Map<string, Promise<FileSystemDirectoryHandle>>([['', Promise.resolve(top)]]);
   const dirFor = (rel: string): Promise<FileSystemDirectoryHandle> => {
     let handle = dirCache.get(rel);
@@ -144,7 +164,7 @@ export async function downloadFolder(
       const dir = await dirFor(slash < 0 ? '' : rel.slice(0, slash));
       const handle = await dir.getFileHandle(displayName(rel), { create: true });
       const writable = await handle.createWritable();
-      await (await openStream(f, session)).pipeTo(writable);
+      await (await openStream(f, session, source)).pipeTo(writable);
       onProgress(++done, files.length);
     }
   };
