@@ -20,13 +20,15 @@ git push railway main
 ```
 Access at `https://your-app.railway.app`
 
-### 3️⃣ Desktop App (Easiest)
-Standalone app with system tray integration
-```bash
-# See DESKTOP_APP.md for full guide
-npm run electron-build
-```
-Install and access via system tray icon
+### 3️⃣ Install as an App (Recommended)
+Once it's running (on Railway or locally), install it from the browser. You get its own window, a desktop/Start menu icon, and a home-screen icon on phones.
+
+- **Chrome (Windows/Mac):** click the install icon at the right end of the address bar, or ⋮ → **Cast, save, and share** → **Install page as app**
+- **Edge (Windows):** ⋯ → **Apps** → **Install this site as an app**
+- **iPhone (Safari):** Share → **Add to Home Screen**
+- **Android (Chrome):** ⋮ → **Add to Home screen** → **Install**
+
+The Electron build in `DESKTOP_APP.md` is experimental and not currently working.
 
 ## Features
 
