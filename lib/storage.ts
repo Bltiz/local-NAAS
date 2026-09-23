@@ -1,194 +1,240 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { writeFile, readFile, unlink, readdir, stat, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import { basename, join } from 'path';
+import { createHash } from 'crypto';
+import { createReadStream } from 'fs';
+import { mkdir, open, readdir, rename, rm, stat, statfs, truncate, unlink } from 'fs/promises';
+import { dirname, join, resolve, sep } from 'path';
 
-// Strips directory components so names like "../secret" can't escape the upload dir.
-function safeName(filename: string): string {
-  const name = basename(filename);
-  if (!name || name === '.' || name === '..') {
-    throw new Error('Invalid filename');
-  }
-  return name;
-}
+export const ENCRYPTED_SUFFIX = '.nasenc';
+const SYSTEM_DIR = '.nas-system';
+const MAX_CHUNK_BYTES = 64 * 1024 * 1024 + 1024;
+const STALE_PART_MS = 7 * 24 * 60 * 60 * 1000;
 
-export interface FileInfo {
-  name: string;
+export interface Entry {
+  path: string;
+  type: 'file' | 'dir';
   size: number;
-  uploadedAt: string;
+  modified: string;
 }
 
-export interface StorageAdapter {
-  upload(file: File): Promise<void>;
-  download(filename: string): Promise<Buffer>;
-  delete(filename: string): Promise<void>;
-  list(): Promise<FileInfo[]>;
-  getDownloadUrl(filename: string): Promise<string>;
-}
-
-// Local file system storage
-class LocalStorage implements StorageAdapter {
-  private uploadDir: string;
-
-  constructor() {
-    this.uploadDir = process.env.UPLOAD_DIR || join(process.cwd(), 'uploads');
+export class StorageError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public details: Record<string, unknown> = {},
+  ) {
+    super(message);
   }
+}
 
-  async upload(file: File): Promise<void> {
-    if (!existsSync(this.uploadDir)) {
-      await mkdir(this.uploadDir, { recursive: true });
+export function rootDir(): string {
+  return resolve(process.env.UPLOAD_DIR || join(process.cwd(), 'uploads'));
+}
+
+function partsDir(): string {
+  return join(rootDir(), SYSTEM_DIR, 'parts');
+}
+
+// Client paths are always "/"-separated and relative to the storage root.
+export function normalizeRelPath(input: string | null | undefined): string {
+  if (typeof input !== 'string') throw new StorageError('Path is required', 400);
+  const segments = input.split('/').filter((s) => s.length > 0);
+  if (segments.length === 0) throw new StorageError('Path is required', 400);
+  if (input.length > 4096) throw new StorageError('Path is too long', 400);
+  for (const segment of segments) {
+    if (segment === '.' || segment === '..' || segment.includes('\\') || segment.includes('\0')) {
+      throw new StorageError('Invalid path', 400);
     }
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-    const filePath = join(this.uploadDir, safeName(file.name));
-    await writeFile(filePath, buffer);
   }
+  if (segments[0] === SYSTEM_DIR) throw new StorageError('Invalid path', 400);
+  return segments.join('/');
+}
 
-  async download(filename: string): Promise<Buffer> {
-    const filePath = join(this.uploadDir, safeName(filename));
-    return await readFile(filePath);
-  }
+export function absolutePath(relPath: string): string {
+  const root = rootDir();
+  const abs = resolve(root, ...normalizeRelPath(relPath).split('/'));
+  if (!abs.startsWith(root + sep)) throw new StorageError('Invalid path', 400);
+  return abs;
+}
 
-  async delete(filename: string): Promise<void> {
-    const filePath = join(this.uploadDir, safeName(filename));
-    await unlink(filePath);
-  }
-
-  async list(): Promise<FileInfo[]> {
-    if (!existsSync(this.uploadDir)) {
-      return [];
-    }
-
-    const fileNames = await readdir(this.uploadDir);
-    
-    const filesWithDetails = await Promise.all(
-      fileNames.filter((name) => !name.startsWith('.')).map(async (name) => {
-        const filePath = join(this.uploadDir, name);
-        const stats = await stat(filePath);
-        
-        return {
-          name,
-          size: stats.size,
-          uploadedAt: stats.mtime.toISOString(),
-        };
-      })
-    );
-
-    filesWithDetails.sort((a, b) => 
-      new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
-    );
-
-    return filesWithDetails;
-  }
-
-  async getDownloadUrl(filename: string): Promise<string> {
-    return `/api/download?file=${encodeURIComponent(filename)}`;
+async function exists(abs: string): Promise<boolean> {
+  try {
+    await stat(abs);
+    return true;
+  } catch {
+    return false;
   }
 }
 
-// S3 storage for Railway/cloud deployment
-class S3Storage implements StorageAdapter {
-  private s3Client: S3Client;
-  private bucket: string;
+export async function listTree(): Promise<Entry[]> {
+  const root = rootDir();
+  const entries: Entry[] = [];
 
-  constructor() {
-    this.bucket = process.env.S3_BUCKET_NAME || '';
-    
-    this.s3Client = new S3Client({
-      region: process.env.S3_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.S3_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || '',
-      },
-    });
-  }
-
-  async upload(file: File): Promise<void> {
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-
-    const command = new PutObjectCommand({
-      Bucket: this.bucket,
-      Key: file.name,
-      Body: buffer,
-      ContentType: file.type,
-      Metadata: {
-        uploadedAt: new Date().toISOString(),
-        originalSize: file.size.toString(),
-      },
-    });
-
-    await this.s3Client.send(command);
-  }
-
-  async download(filename: string): Promise<Buffer> {
-    const command = new GetObjectCommand({
-      Bucket: this.bucket,
-      Key: filename,
-    });
-
-    const response = await this.s3Client.send(command);
-    if (!response.Body) throw new Error('File not found');
-    return Buffer.from(await response.Body.transformToByteArray());
-  }
-
-  async delete(filename: string): Promise<void> {
-    const command = new DeleteObjectCommand({
-      Bucket: this.bucket,
-      Key: filename,
-    });
-
-    await this.s3Client.send(command);
-  }
-
-  async list(): Promise<FileInfo[]> {
-    const command = new ListObjectsV2Command({
-      Bucket: this.bucket,
-    });
-
-    const response = await this.s3Client.send(command);
-    
-    if (!response.Contents) {
-      return [];
+  async function walk(dirAbs: string, dirRel: string) {
+    let items;
+    try {
+      items = await readdir(dirAbs, { withFileTypes: true });
+    } catch {
+      return;
     }
-
-    const files = response.Contents.map((obj) => ({
-      name: obj.Key || '',
-      size: obj.Size || 0,
-      uploadedAt: obj.LastModified?.toISOString() || new Date().toISOString(),
-    }));
-
-    files.sort((a, b) => 
-      new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
+    await Promise.all(
+      items.map(async (item) => {
+        if (!dirRel && item.name === SYSTEM_DIR) return;
+        const rel = dirRel ? `${dirRel}/${item.name}` : item.name;
+        const abs = join(dirAbs, item.name);
+        if (item.isDirectory()) {
+          const s = await stat(abs).catch(() => null);
+          entries.push({ path: rel, type: 'dir', size: 0, modified: (s?.mtime ?? new Date()).toISOString() });
+          await walk(abs, rel);
+        } else if (item.isFile()) {
+          const s = await stat(abs).catch(() => null);
+          if (s) entries.push({ path: rel, type: 'file', size: s.size, modified: s.mtime.toISOString() });
+        }
+      }),
     );
-
-    return files;
   }
 
-  async getDownloadUrl(filename: string): Promise<string> {
-    const command = new GetObjectCommand({
-      Bucket: this.bucket,
-      Key: filename,
-    });
+  await walk(root, '');
+  return entries;
+}
 
-    // Generate a presigned URL valid for 1 hour
-    return await getSignedUrl(this.s3Client, command, { expiresIn: 3600 });
+export async function diskUsage(): Promise<{ free: number; total: number } | null> {
+  try {
+    await mkdir(rootDir(), { recursive: true });
+    const s = await statfs(rootDir());
+    return { free: s.bavail * s.bsize, total: s.blocks * s.bsize };
+  } catch {
+    return null;
   }
 }
 
-// Factory function to get the appropriate storage adapter
-export function getStorageAdapter(): StorageAdapter {
-  const useS3 = process.env.USE_S3 === 'true' && 
-                process.env.S3_BUCKET_NAME && 
-                process.env.S3_ACCESS_KEY_ID && 
-                process.env.S3_SECRET_ACCESS_KEY;
+function partPath(uploadId: string): string {
+  if (!/^[a-f0-9]{16,64}$/.test(uploadId)) throw new StorageError('Invalid upload id', 400);
+  return join(partsDir(), `${uploadId}.part`);
+}
 
-  if (useS3) {
-    console.log('Using S3 storage');
-    return new S3Storage();
-  } else {
-    console.log('Using local file storage');
-    return new LocalStorage();
+export async function receivedBytes(uploadId: string): Promise<number> {
+  const s = await stat(partPath(uploadId)).catch(() => null);
+  return s?.size ?? 0;
+}
+
+async function uniquePath(relPath: string): Promise<string> {
+  if (!(await exists(absolutePath(relPath)))) return relPath;
+  const slash = relPath.lastIndexOf('/');
+  const dir = slash >= 0 ? relPath.slice(0, slash + 1) : '';
+  const name = relPath.slice(slash + 1);
+  const encrypted = name.endsWith(ENCRYPTED_SUFFIX);
+  const base = encrypted ? name.slice(0, -ENCRYPTED_SUFFIX.length) : name;
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : '';
+  for (let i = 1; ; i++) {
+    const candidate = `${dir}${stem} (${i})${ext}${encrypted ? ENCRYPTED_SUFFIX : ''}`;
+    if (!(await exists(absolutePath(candidate)))) return candidate;
   }
+}
+
+interface ChunkInput {
+  uploadId: string;
+  relPath: string;
+  offset: number;
+  totalSize: number;
+  sha256: string | null;
+  body: ReadableStream<Uint8Array> | null;
+}
+
+// Appends one chunk to the upload's part file. Chunks must arrive in order;
+// a mismatched offset returns 409 with the byte count the server already has.
+export async function writeChunk(input: ChunkInput): Promise<{ received: number; done: boolean; path?: string }> {
+  const { uploadId, offset, totalSize, sha256, body } = input;
+  const relPath = normalizeRelPath(input.relPath);
+  const part = partPath(uploadId);
+  await mkdir(partsDir(), { recursive: true });
+
+  const current = await receivedBytes(uploadId);
+  if (current !== offset) {
+    throw new StorageError('Offset mismatch', 409, { received: current });
+  }
+
+  const hash = createHash('sha256');
+  const fh = await open(part, offset === 0 ? 'w' : 'a');
+  let written = 0;
+  try {
+    if (body) {
+      const reader = body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        written += value.byteLength;
+        if (written > MAX_CHUNK_BYTES || offset + written > totalSize) {
+          await reader.cancel();
+          throw new StorageError('Chunk too large', 413);
+        }
+        hash.update(value);
+        await fh.write(value);
+      }
+    }
+  } catch (error) {
+    await fh.close();
+    await truncate(part, offset).catch(() => {});
+    throw error;
+  }
+  await fh.close();
+
+  if (sha256 && hash.digest('hex') !== sha256.toLowerCase()) {
+    await truncate(part, offset);
+    throw new StorageError('Checksum mismatch', 422, { received: offset });
+  }
+
+  const received = offset + written;
+  if (received < totalSize) return { received, done: false };
+
+  const finalRel = await uniquePath(relPath);
+  const finalAbs = absolutePath(finalRel);
+  await mkdir(dirname(finalAbs), { recursive: true });
+  await rename(part, finalAbs);
+  return { received, done: true, path: finalRel };
+}
+
+export async function cancelUpload(uploadId: string): Promise<void> {
+  await unlink(partPath(uploadId)).catch(() => {});
+}
+
+export async function cleanStaleParts(): Promise<void> {
+  const dir = partsDir();
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const now = Date.now();
+  await Promise.all(
+    names.map(async (name) => {
+      const s = await stat(join(dir, name)).catch(() => null);
+      if (s && now - s.mtimeMs > STALE_PART_MS) await unlink(join(dir, name)).catch(() => {});
+    }),
+  );
+}
+
+export async function makeFolder(relPath: string): Promise<string> {
+  const finalRel = await uniquePath(normalizeRelPath(relPath));
+  await mkdir(absolutePath(finalRel), { recursive: true });
+  return finalRel;
+}
+
+export async function removePath(relPath: string): Promise<void> {
+  const abs = absolutePath(relPath);
+  if (!(await exists(abs))) throw new StorageError('Not found', 404);
+  await rm(abs, { recursive: true, force: true });
+}
+
+export async function openForRead(relPath: string, range?: { start: number; end: number }) {
+  const abs = absolutePath(relPath);
+  const s = await stat(abs).catch(() => null);
+  if (!s || !s.isFile()) throw new StorageError('Not found', 404);
+  return {
+    size: s.size,
+    modified: s.mtime,
+    stream: createReadStream(abs, range ? { start: range.start, end: range.end, highWaterMark: 1024 * 1024 } : { highWaterMark: 1024 * 1024 }),
+  };
+}
+
+export async function fileSize(relPath: string): Promise<number> {
+  const s = await stat(absolutePath(relPath)).catch(() => null);
+  if (!s || !s.isFile()) throw new StorageError('Not found', 404);
+  return s.size;
 }

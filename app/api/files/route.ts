@@ -1,18 +1,22 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getStorageAdapter } from '@/lib/storage';
-import { isAuthorized } from '@/lib/auth';
+import { NextResponse } from 'next/server';
+import { protectedRoute } from '@/lib/api';
+import { cleanStaleParts, diskUsage, listTree, makeFolder, removePath } from '@/lib/storage';
 
-export async function GET(request: NextRequest) {
-  if (!(await isAuthorized(request))) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  try {
-    const storage = getStorageAdapter();
-    const files = await storage.list();
+export const dynamic = 'force-dynamic';
 
-    return NextResponse.json({ files });
-  } catch (error) {
-    console.error('List files error:', error);
-    return NextResponse.json({ files: [] });
-  }
-}
+export const GET = protectedRoute(async () => {
+  const [entries, usage] = await Promise.all([listTree(), diskUsage()]);
+  void cleanStaleParts();
+  return NextResponse.json({ entries, usage });
+});
+
+export const POST = protectedRoute(async (request) => {
+  const { path } = await request.json().catch(() => ({ path: null }));
+  const created = await makeFolder(path);
+  return NextResponse.json({ path: created });
+});
+
+export const DELETE = protectedRoute(async (request) => {
+  await removePath(request.nextUrl.searchParams.get('path') ?? '');
+  return NextResponse.json({ success: true });
+});

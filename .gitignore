@@ -43,4 +43,3 @@ next-env.d.ts
 
 # uploaded files
 /uploads
-!/uploads/.gitkeep
