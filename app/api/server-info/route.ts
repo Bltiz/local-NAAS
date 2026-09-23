@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { networkInterfaces } from 'os';
+import { isAuthorized } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
+  if (!(await isAuthorized(request))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     // Check if running on Railway or similar platform
     const railwayPublicDomain = process.env.RAILWAY_PUBLIC_DOMAIN;

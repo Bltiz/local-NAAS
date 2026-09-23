@@ -21,9 +21,15 @@ Files will be lost on restart, but it's free and easy to set up.
    - Choose this repository
    - Railway will auto-detect Next.js and deploy!
 
-3. **Access Your App**:
-   - Railway will provide a public URL (e.g., `your-app.railway.app`)
-   - Share this URL to access from anywhere
+3. **Set a password** (required):
+   - In your Railway service, open **Variables**
+   - Add `NAS_PASSWORD` with a long password of your choice
+   - Until this is set, the site shows a "No password is set" notice and all files stay locked
+
+4. **Access Your App**:
+   - Under **Settings → Networking**, click **Generate Domain**
+   - Open the URL and sign in with your `NAS_PASSWORD`
+   - Changing `NAS_PASSWORD` later signs out every device
 
 ### Limitations:
 - Files are deleted when the app restarts or redeploys (unless you add a Volume, below)
@@ -129,9 +135,8 @@ npm run build
 
 ### For Railway Deployment:
 
-1. **Add Authentication** (optional but recommended):
-   - Use environment variable for password
-   - Add middleware to check auth
+1. **Password protection** is built in: set `NAS_PASSWORD` (see step 3 above).
+   After 5 wrong attempts from one IP, sign-in is blocked for 15 minutes.
 
 2. **Set Upload Limits**:
    - Add file size limits in API routes

@@ -5,7 +5,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { Upload, Download, HardDrive, Wifi, Trash2, File } from 'lucide-react';
+import { Upload, Download, HardDrive, Wifi, Trash2, File, LogOut } from 'lucide-react';
+
+function redirectIfSignedOut(status: number): boolean {
+  if (status === 401) {
+    window.location.replace('/login');
+    return true;
+  }
+  return false;
+}
 
 interface FileItem {
   name: string;
@@ -18,31 +26,38 @@ export default function Home() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [serverAddress, setServerAddress] = useState('');
+  const [passwordProtected, setPasswordProtected] = useState(false);
 
-  useEffect(() => {
-    fetchFiles();
-    fetchServerAddress();
-  }, []);
-
-  const fetchServerAddress = async () => {
-    try {
-      const res = await fetch('/api/server-info');
-      const data = await res.json();
-      setServerAddress(data.address);
-    } catch (error) {
-      console.error('Failed to fetch server address:', error);
-    }
+  const handleSignOut = async () => {
+    await fetch('/api/logout', { method: 'POST' });
+    window.location.replace('/login');
   };
 
   const fetchFiles = async () => {
     try {
       const res = await fetch('/api/files');
+      if (redirectIfSignedOut(res.status)) return;
       const data = await res.json();
       setFiles(data.files || []);
     } catch (error) {
       console.error('Failed to fetch files:', error);
     }
   };
+
+  useEffect(() => {
+    fetch('/api/files')
+      .then((res) => (redirectIfSignedOut(res.status) ? null : res.json()))
+      .then((data) => data && setFiles(data.files || []))
+      .catch((error) => console.error('Failed to fetch files:', error));
+    fetch('/api/server-info')
+      .then((res) => (redirectIfSignedOut(res.status) ? null : res.json()))
+      .then((data) => data && setServerAddress(data.address))
+      .catch((error) => console.error('Failed to fetch server address:', error));
+    fetch('/api/auth-status')
+      .then((res) => res.json())
+      .then((data) => setPasswordProtected(data.mode === 'protected'))
+      .catch(() => {});
+  }, []);
 
   const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
@@ -67,6 +82,7 @@ export default function Home() {
       });
 
       xhr.addEventListener('load', () => {
+        if (redirectIfSignedOut(xhr.status)) return;
         if (xhr.status === 200) {
           fetchFiles();
           setUploadProgress(100);
@@ -74,7 +90,14 @@ export default function Home() {
             setUploading(false);
             setUploadProgress(0);
           }, 1000);
+        } else {
+          setUploading(false);
+          setUploadProgress(0);
         }
+      });
+      xhr.addEventListener('error', () => {
+        setUploading(false);
+        setUploadProgress(0);
       });
 
       xhr.open('POST', '/api/upload');
@@ -91,11 +114,12 @@ export default function Home() {
 
   const handleDelete = async (filename: string) => {
     try {
-      await fetch('/api/delete', {
+      const res = await fetch('/api/delete', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename }),
       });
+      if (redirectIfSignedOut(res.status)) return;
       fetchFiles();
     } catch (error) {
       console.error('Delete failed:', error);
@@ -113,6 +137,19 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4 md:p-8">
       <div className="max-w-6xl mx-auto space-y-6">
+        {passwordProtected && (
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleSignOut}
+              className="border-slate-600 bg-slate-800/50 text-slate-200 hover:bg-slate-700 hover:text-white"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign out
+            </Button>
+          </div>
+        )}
         <div className="text-center space-y-2">
           <h1 className="text-4xl md:text-6xl font-bold text-white flex items-center justify-center gap-3">
             <HardDrive className="w-10 h-10 md:w-14 md:h-14" />

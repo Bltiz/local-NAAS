@@ -129,14 +129,8 @@ class S3Storage implements StorageAdapter {
     });
 
     const response = await this.s3Client.send(command);
-    const stream = response.Body as any;
-    const chunks: Uint8Array[] = [];
-
-    for await (const chunk of stream) {
-      chunks.push(chunk);
-    }
-
-    return Buffer.concat(chunks);
+    if (!response.Body) throw new Error('File not found');
+    return Buffer.from(await response.Body.transformToByteArray());
   }
 
   async delete(filename: string): Promise<void> {

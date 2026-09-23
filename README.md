@@ -84,6 +84,22 @@ npm start
 
 ## Configuration
 
+### Password Protection
+Set `NAS_PASSWORD` to require a sign-in before anyone can see, upload, or delete files.
+
+- **Local use:** optional. Without it, anyone on your Wi-Fi can use the app.
+- **Railway:** required. Without it, the hosted app stays locked and shows a setup notice.
+
+```bash
+# Windows PowerShell
+$env:NAS_PASSWORD="choose-a-long-password"; npm run dev
+
+# Mac / Linux / WSL
+NAS_PASSWORD=choose-a-long-password npm run dev
+```
+
+Sessions last 30 days. Changing the password signs out every device. Five wrong attempts from one IP block sign-in for 15 minutes.
+
 ### Local Storage (Default)
 No setup needed! Files stored in `/uploads` folder.
 
@@ -225,7 +241,7 @@ local-nas/
 - HTTPS encryption
 - Private S3 buckets
 - Environment variable secrets
-- Add authentication (see RAILWAY_DEPLOY.md)
+- Password sign-in via `NAS_PASSWORD` (required on Railway)
 
 ### Desktop App
 - Runs entirely local
@@ -257,7 +273,8 @@ Edit port in:
 
 - [ ] Docker support
 - [ ] File encryption
-- [ ] User authentication
+- [x] Password protection
+- [ ] Multiple user accounts
 - [ ] File sharing links
 - [ ] Mobile apps (iOS/Android)
 - [ ] File preview (images, PDFs)
@@ -269,7 +286,7 @@ Edit port in:
 ## Contributing
 
 Contributions welcome! Ideas:
-- Add authentication system
+- Add multiple user accounts
 - Implement file preview
 - Add drag & drop from desktop
 - Create mobile apps

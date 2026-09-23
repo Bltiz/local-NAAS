@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStorageAdapter } from '@/lib/storage';
+import { isAuthorized } from '@/lib/auth';
 
 export async function POST(request: NextRequest) {
+  if (!(await isAuthorized(request))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const formData = await request.formData();
     const files = formData.getAll('files') as File[];
