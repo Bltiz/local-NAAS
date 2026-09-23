@@ -310,7 +310,7 @@ Contributions welcome! Ideas:
 - 📖 Read the guides: `RAILWAY_DEPLOY.md`, `DESKTOP_APP.md`
 - 🐛 Report issues: GitHub Issues
 - 💡 Request features: GitHub Discussions
-- 📧 Email: [your-email]
+- 📧 Email: [vxxtwo@gmail.com]
 
 ## License
 
