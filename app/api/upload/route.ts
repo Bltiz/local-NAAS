@@ -22,6 +22,7 @@ export const PUT = protectedRoute(async (request) => {
     relPath: params.get('path') ?? '',
     offset: intParam(params.get('offset'), 'offset'),
     totalSize: intParam(params.get('total'), 'total'),
+    mtime: params.get('mtime') ? intParam(params.get('mtime'), 'mtime') : null,
     sha256: request.headers.get('x-chunk-sha256'),
     body: request.body,
   });

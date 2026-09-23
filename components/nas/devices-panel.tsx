@@ -7,12 +7,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { formatBytes, formatEta, formatSpeed } from '@/components/nas/format';
-import { type Picked, entriesFromDrop, fromEntries, fromFileList } from '@/lib/client/pick';
+import { type Picked, entriesFromDrop, fromFileList } from '@/lib/client/pick';
 import type { DirectSnapshot, Peer, Transfer } from '@/lib/client/rtc';
 
 interface Props {
   snapshot: DirectSnapshot;
   onSend: (peer: Peer, picked: Picked) => void;
+  onSendEntries: (peer: Peer, entries: FileSystemEntry[]) => void;
   onAccept: (id: string) => void;
   onDecline: (id: string) => void;
   onCancel: (id: string) => void;
@@ -71,7 +72,7 @@ function TransferRow({ t, onCancel, onDismiss }: { t: Transfer; onCancel: () => 
   );
 }
 
-export function DevicesPanel({ snapshot, onSend, onAccept, onDecline, onCancel, onDismiss, onRename }: Props) {
+export function DevicesPanel({ snapshot, onSend, onSendEntries, onAccept, onDecline, onCancel, onDismiss, onRename }: Props) {
   const filesInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const target = useRef<Peer | null>(null);
@@ -174,7 +175,7 @@ export function DevicesPanel({ snapshot, onSend, onAccept, onDecline, onCancel, 
               e.stopPropagation();
               setDropTarget(null);
               const entries = entriesFromDrop(e.dataTransfer);
-              if (entries) fromEntries(entries).then((picked) => onSend(peer, picked));
+              if (entries) onSendEntries(peer, entries);
               else if (e.dataTransfer.files.length) onSend(peer, fromFileList(e.dataTransfer.files));
             }}
             className={`flex flex-wrap items-center gap-2 rounded-lg border p-3 transition-colors ${dropTarget === peer.id ? 'border-primary bg-primary/15' : 'border-border bg-background/40'}`}

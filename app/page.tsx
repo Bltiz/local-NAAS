@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { FolderPlus, FolderUp, HardDrive, Lock, LockOpen, LogOut, RefreshCw, Search, Upload, UploadCloud, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { FolderPlus, FolderUp, HardDrive, Lock, LockOpen, LogOut, RefreshCw, Search, Trash2, Upload, UploadCloud, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,7 +20,10 @@ import { DevicesPanel } from '@/components/nas/devices-panel';
 import { EncryptionDialog } from '@/components/nas/encryption-dialog';
 import { FileBrowser } from '@/components/nas/file-browser';
 import { formatBytes } from '@/components/nas/format';
+import { PlanDialog, type SpeedHistory } from '@/components/nas/plan-dialog';
 import { PreviewDialog } from '@/components/nas/preview-dialog';
+import { StoragePanel, type StorageInfo } from '@/components/nas/storage-panel';
+import { TrashDialog } from '@/components/nas/trash-dialog';
 import { UploadPanel } from '@/components/nas/upload-panel';
 import { EncryptionSession } from '@/lib/client/crypto';
 import {
@@ -29,14 +32,15 @@ import {
   displayName,
   downloadFile,
   downloadFolder,
-  isEncrypted,
   supportsFolderSave,
 } from '@/lib/client/download';
-import { type Picked, entriesFromDrop, fromEntries, fromFileList, placeInto } from '@/lib/client/pick';
+import { type Picked, entriesFromDrop, fromEntries, fromFileList } from '@/lib/client/pick';
+import { type UploadPlan, buildPlan, planUploads } from '@/lib/client/plan';
 import { type DirectSnapshot, DirectShare, type Peer, defaultDeviceName } from '@/lib/client/rtc';
-import { Uploader } from '@/lib/client/upload';
+import { type SavedFile, Uploader } from '@/lib/client/upload';
 
 const DEVICE_NAME_KEY = 'nas-device-name';
+const SPEED_KEY = 'nas-upload-speed';
 const EMPTY_DIRECT: DirectSnapshot = { selfId: '', selfName: '', online: false, peers: [], transfers: [] };
 const noopSubscribe = () => () => {};
 
@@ -44,9 +48,37 @@ function signOutRedirect() {
   window.location.replace('/login');
 }
 
+const parentOf = (path: string) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+
+function mergeSaved(prev: FileEntry[] | null, saved: SavedFile[]): FileEntry[] | null {
+  if (!prev) return prev;
+  const map = new Map(prev.map((e) => [e.path, e]));
+  for (const f of saved) {
+    map.set(f.path, { path: f.path, type: 'file', size: f.size, modified: f.modified });
+    for (let p = parentOf(f.path); p && !map.has(p); p = parentOf(p)) map.set(p, { path: p, type: 'dir', size: 0, modified: f.modified });
+  }
+  return Array.from(map.values());
+}
+
+interface ListResponse {
+  entries: FileEntry[];
+  usage: { free: number; total: number } | null;
+  trashBytes: number;
+  storage: StorageInfo;
+}
+
 export default function Home() {
   const [entries, setEntries] = useState<FileEntry[] | null>(null);
   const [usage, setUsage] = useState<{ free: number; total: number } | null>(null);
+  const [storage, setStorage] = useState<StorageInfo | null>(null);
+  const [trashBytes, setTrashBytes] = useState(0);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [scanning, setScanning] = useState<number | null>(null);
+  const [plan, setPlan] = useState<UploadPlan | null>(null);
+  const [planTarget, setPlanTarget] = useState<Peer | null>(null);
+  const [speed, setSpeed] = useState<SpeedHistory | null>(null);
+  const savedBuffer = useRef<SavedFile[]>([]);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dir, setDir] = useState('');
   const [query, setQuery] = useState('');
@@ -66,14 +98,16 @@ export default function Home() {
   const folderInput = useRef<HTMLInputElement>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadEntries = useCallback(async () => {
+  const loadEntries = useCallback(async (refresh = false) => {
     try {
-      const res = await fetch('/api/files', { cache: 'no-store' });
+      const res = await fetch(`/api/files${refresh ? '?refresh=1' : ''}`, { cache: 'no-store' });
       if (res.status === 401) return signOutRedirect();
       if (!res.ok) throw new Error(`The server returned an error (${res.status}).`);
-      const data = await res.json();
+      const data = (await res.json()) as ListResponse;
       setEntries(data.entries);
       setUsage(data.usage);
+      setStorage(data.storage);
+      setTrashBytes(data.trashBytes);
       setLoadError(null);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Could not load your files.');
@@ -88,10 +122,22 @@ export default function Home() {
     }, 400);
   }, [loadEntries]);
 
+  // Uploaded files are merged into the list locally (at most once a second)
+  // instead of re-fetching a listing that may hold 100k+ entries.
+  const onSaved = useCallback((files: SavedFile[]) => {
+    savedBuffer.current.push(...files);
+    if (savedTimer.current) return;
+    savedTimer.current = setTimeout(() => {
+      savedTimer.current = null;
+      const batch = savedBuffer.current.splice(0);
+      setEntries((prev) => mergeSaved(prev, batch));
+    }, 1000);
+  }, []);
+
   const [uploader] = useState(() => new Uploader());
   useEffect(() => {
-    uploader.setCallbacks({ onFileDone: scheduleRefresh, onSignedOut: signOutRedirect });
-  }, [uploader, scheduleRefresh]);
+    uploader.setCallbacks({ onSaved, onSignedOut: signOutRedirect });
+  }, [uploader, onSaved]);
   const uploads = useSyncExternalStore(uploader.subscribe, uploader.getSnapshot, uploader.getSnapshot);
   const directSnapshot = useSyncExternalStore(
     direct?.subscribe ?? noopSubscribe,
@@ -109,10 +155,12 @@ export default function Home() {
         if (!res.ok) throw new Error(`The server returned an error (${res.status}).`);
         return res.json();
       })
-      .then((data) => {
+      .then((data: ListResponse | null) => {
         if (!data) return;
         setEntries(data.entries);
         setUsage(data.usage);
+        setStorage(data.storage);
+        setTrashBytes(data.trashBytes);
       })
       .catch((error) => setLoadError(error instanceof Error ? error.message : 'Could not load your files.'));
     fetch('/api/auth-status')
@@ -131,7 +179,7 @@ export default function Home() {
     };
   }, []);
 
-  const uploading = uploads.active > 0;
+  const uploading = uploads.running;
   useEffect(() => {
     if (!uploading) return;
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
@@ -139,7 +187,33 @@ export default function Home() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [uploading]);
 
-  const existingPaths = useMemo(() => new Set((entries ?? []).map((e) => e.path)), [entries]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(SPEED_KEY) ?? 'null');
+        if (saved) setSpeed(saved);
+      } catch {}
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  // Remember the average speed of each finished upload for the next time estimate.
+  const run = useRef<{ t: number; bytes: number; files: number } | null>(null);
+  useEffect(() => {
+    if (uploading && !run.current) {
+      run.current = { t: performance.now(), bytes: uploads.sentBytes, files: uploads.doneFiles };
+    } else if (!uploading && run.current) {
+      const secs = (performance.now() - run.current.t) / 1000;
+      const bytes = uploads.sentBytes - run.current.bytes;
+      const files = uploads.doneFiles - run.current.files;
+      run.current = null;
+      if (secs > 3 && files > 0) {
+        const next = { bytesPerSecond: bytes / secs, filesPerSecond: files / secs };
+        localStorage.setItem(SPEED_KEY, JSON.stringify(next));
+        requestAnimationFrame(() => setSpeed(next));
+      }
+    }
+  }, [uploading, uploads.sentBytes, uploads.doneFiles]);
 
   const withUnlock = (action: (s: EncryptionSession | null) => Promise<unknown>) => {
     action(session).catch((error) => {
@@ -152,15 +226,42 @@ export default function Home() {
     });
   };
 
-  const startUpload = async (picked: Picked) => {
+  const showPlan = (picked: Picked, target: Peer | null = null) => {
+    setScanning(null);
     if (picked.files.length === 0 && picked.emptyDirs.length === 0) return;
-    const placed = placeInto(picked, dir, existingPaths);
-    for (const path of placed.dirs) {
+    setPlanTarget(target);
+    setPlan(buildPlan(picked, target ? '' : dir, target ? [] : (entries ?? []), !target && encryptUploads && session !== null));
+  };
+
+  const scanDrop = (dropped: FileSystemEntry[], target: Peer | null) => {
+    setScanning(0);
+    fromEntries(dropped, setScanning)
+      .then((picked) => showPlan(picked, target))
+      .catch(() => {
+        setScanning(null);
+        toast.error('Could not read the dropped files.');
+      });
+  };
+
+  const confirmPlan = async (skip: Set<string>) => {
+    const current = plan;
+    const target = planTarget;
+    setPlan(null);
+    setPlanTarget(null);
+    if (!current) return;
+    const { uploads: pending, dirs } = planUploads(current, skip);
+    if (target) {
+      direct?.send(target, pending.map((u) => ({ file: u.file, path: u.path })));
+      return;
+    }
+    for (const path of dirs) {
       await fetch('/api/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
     }
-    if (placed.files.length) uploader.add(placed.files, encryptUploads ? session : null);
-    else scheduleRefresh();
+    if (pending.length) uploader.add(pending, current.encrypted ? session : null);
+    if (dirs.length) scheduleRefresh();
   };
+
+  const startUpload = (picked: Picked) => showPlan(picked);
 
   const onPickedInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) startUpload(fromFileList(e.target.files));
@@ -175,7 +276,7 @@ export default function Home() {
     dragDepth.current = 0;
     setDragActive(false);
     const dropped = entriesFromDrop(e.dataTransfer);
-    if (dropped) fromEntries(dropped).then(startUpload).catch(() => toast.error('Could not read the dropped files.'));
+    if (dropped) scanDrop(dropped, null);
     else startUpload(fromFileList(e.dataTransfer.files));
   };
 
@@ -187,7 +288,17 @@ export default function Home() {
     if (res.status === 401) return signOutRedirect();
     if (!res.ok) toast.error(`Couldn’t delete ${displayName(target.path)}.`);
     else {
-      toast.success(`Deleted ${displayName(target.path)}`);
+      const { trashId } = await res.json();
+      toast.success(`Moved ${displayName(target.path)} to Trash`, {
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            const undo = await fetch('/api/trash', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: trashId }) });
+            if (!undo.ok) toast.error('Couldn’t restore it. Open Trash to try again.');
+            loadEntries(true);
+          },
+        },
+      });
       if (target.type === 'dir' && (dir === target.path || dir.startsWith(`${target.path}/`))) setDir(target.path.includes('/') ? target.path.slice(0, target.path.lastIndexOf('/')) : '');
     }
     loadEntries();
@@ -225,7 +336,7 @@ export default function Home() {
 
   const sendDirect = (peer: Peer, picked: Picked) => {
     if (!direct || picked.files.length === 0) return;
-    direct.send(peer, picked.files.map((f) => ({ file: f.file, path: f.relPath })));
+    showPlan(picked, peer);
   };
 
   const usedPercent = usage ? Math.round(((usage.total - usage.free) / usage.total) * 100) : null;
@@ -317,7 +428,10 @@ export default function Home() {
             <Button size="sm" variant="outline" onClick={() => setNewFolderOpen(true)} aria-label="New folder">
               <FolderPlus /> <span className="hidden sm:inline">New folder</span>
             </Button>
-            <Button size="icon-sm" variant="ghost" onClick={loadEntries} aria-label="Refresh">
+            <Button size="icon-sm" variant="ghost" onClick={() => setTrashOpen(true)} aria-label="Open trash">
+              <Trash2 />
+            </Button>
+            <Button size="icon-sm" variant="ghost" onClick={() => loadEntries(true)} aria-label="Refresh">
               <RefreshCw />
             </Button>
           </div>
@@ -330,7 +444,7 @@ export default function Home() {
               setDir(path);
               setQuery('');
             }}
-            onRetry={loadEntries}
+            onRetry={() => loadEntries(true)}
             onPreview={setPreview}
             onDownload={(entry) => withUnlock((s) => downloadFile(entry, s))}
             onDownloadFolder={onDownloadFolder}
@@ -347,6 +461,7 @@ export default function Home() {
           <DevicesPanel
             snapshot={directSnapshot}
             onSend={sendDirect}
+            onSendEntries={(peer, dropped) => scanDrop(dropped, peer)}
             onAccept={(id) => direct?.accept(id)}
             onDecline={(id) => direct?.decline(id)}
             onCancel={(id) => direct?.cancel(id)}
@@ -361,6 +476,17 @@ export default function Home() {
             onRetry={() => uploader.retryFailed()}
             onCancel={() => uploader.cancelAll()}
             onClear={() => uploader.clearFinished()}
+          />
+          <StoragePanel
+            entries={entries}
+            usage={usage}
+            trashBytes={trashBytes}
+            storage={storage}
+            onOpenTrash={() => setTrashOpen(true)}
+            onOpenFolder={(path) => {
+              setDir(path);
+              setQuery('');
+            }}
           />
         </aside>
       </main>
@@ -377,6 +503,22 @@ export default function Home() {
 
       <input ref={filesInput} type="file" multiple hidden onChange={onPickedInput} />
       <input ref={folderInput} type="file" hidden onChange={onPickedInput} {...{ webkitdirectory: '', directory: '' }} />
+
+      <PlanDialog
+        scanning={scanning}
+        plan={plan}
+        freeBytes={usage?.free ?? null}
+        speed={speed}
+        sendTo={planTarget?.name ?? null}
+        onConfirm={confirmPlan}
+        onCancel={() => {
+          setPlan(null);
+          setPlanTarget(null);
+          setScanning(null);
+        }}
+      />
+
+      <TrashDialog open={trashOpen} onOpenChange={setTrashOpen} onChanged={() => loadEntries(true)} />
 
       <PreviewDialog
         entry={preview}
@@ -415,10 +557,8 @@ export default function Home() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleteTarget ? `“${displayName(deleteTarget.path)}”` : ''}?</AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteTarget?.type === 'dir'
-                ? 'This permanently deletes the folder and everything inside it from the server.'
-                : 'This permanently deletes the file from the server.'}
-              {deleteTarget && isEncrypted(deleteTarget.path) && ' It’s encrypted, so there’s no other copy on the server.'}
+              {deleteTarget?.type === 'dir' ? 'The folder and everything inside it move to Trash.' : 'The file moves to Trash.'} You can
+              restore it from Trash for 30 days.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

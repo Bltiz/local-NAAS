@@ -1,4 +1,2 @@
 [variables]
 NIXPACKS_NODE_VERSION = "22"
-# The server never runs Electron; skip its large binary download during install.
-ELECTRON_SKIP_BINARY_DOWNLOAD = "1"

@@ -8,42 +8,26 @@ export interface Picked {
   emptyDirs: string[];
 }
 
-export function fromFileList(list: FileList): Picked {
+export function fromFileList(list: FileList | File[]): Picked {
   return {
     files: Array.from(list, (file) => ({ file, relPath: file.webkitRelativePath || file.name })),
     emptyDirs: [],
   };
 }
 
-function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
-  return new Promise((resolve, reject) => {
-    const all: FileSystemEntry[] = [];
-    // readEntries returns results in batches (~100 in Chrome) until it returns an empty batch.
-    const next = () =>
-      reader.readEntries((batch) => {
-        if (batch.length === 0) resolve(all);
-        else {
-          all.push(...batch);
-          next();
-        }
-      }, reject);
-    next();
-  });
+function readBatch(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
+  return new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+}
+
+async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
+  // readEntries returns results in batches (~100 in Chrome) until it returns an empty batch.
+  const all: FileSystemEntry[] = [];
+  for (let batch = await readBatch(reader); batch.length > 0; batch = await readBatch(reader)) all.push(...batch);
+  return all;
 }
 
 function entryFile(entry: FileSystemFileEntry): Promise<File> {
   return new Promise((resolve, reject) => entry.file(resolve, reject));
-}
-
-async function walk(entry: FileSystemEntry, prefix: string, out: Picked) {
-  const path = prefix ? `${prefix}/${entry.name}` : entry.name;
-  if (entry.isFile) {
-    out.files.push({ file: await entryFile(entry as FileSystemFileEntry), relPath: path });
-  } else if (entry.isDirectory) {
-    const children = await readAllEntries((entry as FileSystemDirectoryEntry).createReader());
-    if (children.length === 0) out.emptyDirs.push(path);
-    for (const child of children) await walk(child, path, out);
-  }
 }
 
 // Entries must be grabbed synchronously inside the drop handler, before any await.
@@ -53,37 +37,61 @@ export function entriesFromDrop(dt: DataTransfer): FileSystemEntry[] | null {
   return items.map((i) => i.webkitGetAsEntry()).filter((e): e is FileSystemEntry => e !== null);
 }
 
-export async function fromEntries(entries: FileSystemEntry[]): Promise<Picked> {
+// Walks dropped folders with limited parallelism, reporting how many files it has found.
+export async function fromEntries(entries: FileSystemEntry[], onProgress?: (found: number) => void): Promise<Picked> {
   const out: Picked = { files: [], emptyDirs: [] };
-  for (const entry of entries) await walk(entry, '', out);
+  const queue: { entry: FileSystemEntry; prefix: string }[] = entries.map((entry) => ({ entry, prefix: '' }));
+  let lastReport = 0;
+
+  const worker = async () => {
+    for (let job = queue.shift(); job; job = queue.shift()) {
+      const { entry, prefix } = job;
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isFile) {
+        out.files.push({ file: await entryFile(entry as FileSystemFileEntry), relPath: path });
+        if (onProgress && out.files.length - lastReport >= 250) {
+          lastReport = out.files.length;
+          onProgress(out.files.length);
+        }
+      } else if (entry.isDirectory) {
+        const children = await readAllEntries((entry as FileSystemDirectoryEntry).createReader());
+        if (children.length === 0) out.emptyDirs.push(path);
+        for (const child of children) queue.push({ entry: child, prefix: path });
+      }
+    }
+  };
+  // Workers stop when the queue is momentarily empty, so keep relaunching until it stays empty.
+  while (queue.length > 0) await Promise.all(Array.from({ length: 16 }, worker));
+  onProgress?.(out.files.length);
   return out;
 }
 
-// Maps picked paths into destDir. A top-level folder that already exists gets a
-// "Name (1)" suffix so an upload never merges into or overwrites existing files.
-export function placeInto(picked: Picked, destDir: string, existing: Set<string>): { files: { file: File; path: string }[]; dirs: string[] } {
-  const join = (p: string) => (destDir ? `${destDir}/${p}` : p);
-  const renamed = new Map<string, string>();
-  const topName = (rel: string) => rel.split('/')[0];
-  const isFolderTop = (rel: string) => rel.includes('/');
+// Folders that tools recreate on demand. Shown in the upload summary so they can be skipped.
+export const REBUILDABLE = new Map<string, string>([
+  ['node_modules', 'npm install'],
+  ['.next', 'next build'],
+  ['.nuxt', 'nuxt build'],
+  ['.svelte-kit', 'svelte-kit sync'],
+  ['.turbo', 'turbo cache'],
+  ['.parcel-cache', 'parcel cache'],
+  ['.vite', 'vite cache'],
+  ['.cache', 'tool cache'],
+  ['dist', 'build output'],
+  ['build', 'build output'],
+  ['coverage', 'test coverage'],
+  ['__pycache__', 'Python cache'],
+  ['.pytest_cache', 'pytest cache'],
+  ['.mypy_cache', 'mypy cache'],
+  ['.venv', 'Python virtualenv'],
+  ['venv', 'Python virtualenv'],
+  ['target', 'Rust/Java build output'],
+  ['.gradle', 'Gradle cache'],
+  ['Pods', 'pod install'],
+  ['DerivedData', 'Xcode build'],
+]);
 
-  const tops = new Set<string>([
-    ...picked.files.filter((f) => isFolderTop(f.relPath)).map((f) => topName(f.relPath)),
-    ...picked.emptyDirs.map(topName),
-  ]);
-  for (const top of tops) {
-    let candidate = top;
-    for (let i = 1; existing.has(join(candidate)); i++) candidate = `${top} (${i})`;
-    renamed.set(top, candidate);
-  }
-  const remap = (rel: string) => {
-    const [top, ...rest] = rel.split('/');
-    const mapped = renamed.get(top);
-    return join(mapped && (rest.length > 0 || picked.emptyDirs.includes(rel)) ? [mapped, ...rest].join('/') : rel);
-  };
-
-  return {
-    files: picked.files.map((f) => ({ file: f.file, path: remap(f.relPath) })),
-    dirs: picked.emptyDirs.map(remap),
-  };
+export function rebuildableKind(relPath: string): string | null {
+  const segments = relPath.split('/');
+  for (let i = 0; i < segments.length - 1; i++) if (REBUILDABLE.has(segments[i])) return segments[i];
+  return null;
 }
