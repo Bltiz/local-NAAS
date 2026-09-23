@@ -90,3 +90,7 @@ proxy.ts                 Redirects signed-out visitors to /login
 - Search matches file and folder names, not file contents.
 - Encrypted file previews are limited to 1 GB; download larger ones instead.
 - The Electron desktop build (`DESKTOP_APP.md`, `electron.js`) is experimental and not currently working. Install the web app instead.
+
+## Support
+
+Questions or problems: [vxxtwo@gmail.com](mailto:vxxtwo@gmail.com)
