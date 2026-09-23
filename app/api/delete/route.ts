@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { unlink } from 'fs/promises';
-import { join } from 'path';
-import { existsSync } from 'fs';
+import { getStorageAdapter } from '@/lib/storage';
 
 export async function DELETE(request: NextRequest) {
   try {
@@ -11,13 +9,8 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Filename required' }, { status: 400 });
     }
 
-    const filePath = join(process.cwd(), 'uploads', filename);
-
-    if (!existsSync(filePath)) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
-    }
-
-    await unlink(filePath);
+    const storage = getStorageAdapter();
+    await storage.delete(filename);
 
     return NextResponse.json({ success: true });
   } catch (error) {

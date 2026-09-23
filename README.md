@@ -1,187 +1,311 @@
-# Local NAS - Network File Transfer System
+# Local NAS - Universal File Transfer System
 
-A beautiful, modern web-based file transfer system that lets you share files between your PC and laptop over the same local network. Think of it as your personal Dropbox or Google Drive, but everything stays on your local network!
+A beautiful, modern file transfer system that works locally, on the cloud, or as a desktop app! Transfer files between your devices easily and securely.
+
+## 🚀 Quick Start Options
+
+### 1️⃣ Local Network (Fastest)
+Perfect for transferring between PC and laptop on same WiFi
+```bash
+npm install
+npm run dev
+```
+Access at `http://your-ip:43214`
+
+### 2️⃣ Cloud Deployment (24/7 Access)
+Deploy to Railway for internet access anywhere
+```bash
+# See RAILWAY_DEPLOY.md for full guide
+git push railway main
+```
+Access at `https://your-app.railway.app`
+
+### 3️⃣ Desktop App (Easiest)
+Standalone app with system tray integration
+```bash
+# See DESKTOP_APP.md for full guide
+npm run electron-build
+```
+Install and access via system tray icon
 
 ## Features
 
 ✨ **Easy to Use** - Drag and drop files or click to upload
-🚀 **Fast Transfer** - Direct transfer over your local network, no internet needed
-💾 **Any File Type** - Share documents, photos, videos, or any file
-🎨 **Beautiful UI** - Modern, responsive design that works on all devices
-📱 **Mobile Friendly** - Access from phones, tablets, laptops, or desktops
-🔒 **Local Only** - All files stay on your network, no cloud storage
+🚀 **Multiple Deploy Options** - Local, cloud, or desktop app
+💾 **Flexible Storage** - Local files or AWS S3
+🎨 **Beautiful UI** - Modern, responsive design
+📱 **Cross-Platform** - Works on Windows, Mac, Linux
+🔒 **Secure** - Local network or private cloud deployment
+⚡ **Fast** - Direct transfers, no middle man
 
-## How It Works
+## Use Cases
 
-1. **Start the server** on one device (your PC)
-2. **Get the network address** displayed on the screen
-3. **Open that address** on your laptop's browser
-4. **Upload and download** files between devices!
+### 👨‍💻 Developer Workflow
+- Transfer code between work PC and home laptop
+- Share builds with team members
+- Quick file sync without git
 
-## Getting Started
+### 📸 Media Transfer
+- Move photos from phone to PC
+- Transfer videos between devices
+- Backup important files
+
+### 💼 Business
+- Share files in office network
+- Transfer documents between workstations
+- Quick file sharing without email
+
+### 🏠 Home Network
+- Share files between family computers
+- Transfer media to smart TV
+- Central file hub for home devices
+
+## Installation
 
 ### Prerequisites
+- Node.js 18+ (not needed for desktop app)
+- Devices on same network (for local mode)
 
-- Node.js 18+ installed on your computer
-- Both devices connected to the same WiFi network
-
-### Installation
-
+### Setup
 ```bash
+# Clone or download this repo
+git clone <your-repo-url>
+
 # Install dependencies
 npm install
 
-# Start the development server
+# Run in development mode
 npm run dev
-```
 
-The server will start at `http://0.0.0.0:43214`
-
-### Usage
-
-#### On Your PC (Server):
-
-1. Run `npm run dev` in this directory
-2. Look at the screen - you'll see a **Network Address** like `http://192.168.1.100:43214`
-3. Keep this terminal window open to keep the server running
-
-#### On Your Laptop (Client):
-
-1. Open your web browser
-2. Type in the network address from your PC (e.g., `http://192.168.1.100:43214`)
-3. You'll see the same interface - upload and download files!
-
-### Uploading Files
-
-- Click the upload area or drag & drop files
-- Multiple files can be uploaded at once
-- Progress bar shows upload status
-- Files appear in the "Available Files" section immediately
-
-### Downloading Files
-
-- Click the download icon (↓) next to any file
-- File downloads to your device's default download folder
-
-### Deleting Files
-
-- Click the trash icon (🗑️) next to any file
-- File is permanently removed from the server
-
-## File Storage
-
-All uploaded files are stored in the `/uploads` directory in this project folder. You can:
-
-- Browse them directly in your file manager
-- Back them up manually
-- Move them to permanent storage when done
-
-## Network Setup
-
-### Finding Your IP Address
-
-If you need to find your computer's IP address manually:
-
-**Windows:**
-```bash
-ipconfig
-# Look for "IPv4 Address" under your WiFi adapter
-```
-
-**Mac/Linux:**
-```bash
-ifconfig
-# or
-ip addr show
-# Look for inet address under your WiFi interface
-```
-
-### Firewall Settings
-
-If you can't connect from your laptop:
-
-**Windows:**
-- Windows Defender Firewall → Allow an app
-- Add Node.js if not already allowed
-
-**Mac:**
-- System Preferences → Security & Privacy → Firewall
-- Add Node.js to allowed applications
-
-## Production Use
-
-To run this as a permanent service:
-
-```bash
-# Build for production
+# Or build for production
 npm run build
-
-# Start production server
 npm start
 ```
 
-The production server runs on port 43214 by default. To change it, edit `package.json` scripts.
+## Configuration
 
-## Tips & Tricks
+### Local Storage (Default)
+No setup needed! Files stored in `/uploads` folder.
 
-### Keep Server Running
-- Keep the terminal window open on your PC
-- Or run in background: `npm run dev &` (Linux/Mac) or use PM2
+### S3 Storage (For Railway)
+Create `.env` file:
+```env
+USE_S3=true
+S3_BUCKET_NAME=your-bucket-name
+S3_REGION=us-east-1
+S3_ACCESS_KEY_ID=your-key
+S3_SECRET_ACCESS_KEY=your-secret
+```
 
-### Access from Multiple Devices
-- The same address works on ALL devices on your network
-- Phone, tablet, smart TV - if it has a browser, it works!
+See `RAILWAY_DEPLOY.md` for detailed S3 setup.
 
-### Large Files
-- No file size limit built in
-- Transfer speed depends on your WiFi speed
-- 100MB+ files work perfectly fine
+### Desktop App
+```bash
+# Development
+npm run electron-dev
 
-### Security Note
-⚠️ This is designed for LOCAL NETWORKS ONLY. Anyone on your WiFi can access it.
-- Only run it when you need to transfer files
-- Don't expose it to the internet without adding authentication
-- Trust all devices on your network
+# Build for your platform
+npm run electron-build
+```
 
-## Troubleshooting
+See `DESKTOP_APP.md` for full desktop app guide.
 
-**Can't connect from laptop?**
-- Make sure both devices are on the same WiFi network
-- Check firewall settings (see above)
-- Try using the IP address instead of hostname
-- Verify the server is running on your PC
+## Usage
 
-**Files not uploading?**
-- Check disk space on the server
-- Verify write permissions on `/uploads` folder
-- Try smaller files first to test
+### Web Interface
 
-**Server crashed?**
-- Just restart with `npm run dev`
-- Your files in `/uploads` are safe
+1. **Upload Files**
+   - Drag & drop into upload area
+   - Or click to browse files
+   - Multiple files supported
+   - Progress bar shows upload status
 
-## Future Enhancements
+2. **Download Files**
+   - Click download icon (↓) next to file
+   - File downloads to your device
 
-Want to add more features? Ideas:
-- Password protection
-- File preview (images, PDFs)
-- Folder support
-- File search
-- QR code for easy connection
-- Mobile app version
+3. **Delete Files**
+   - Click trash icon (🗑️) to remove
+   - Permanent deletion from storage
+
+### Desktop App
+
+1. **Access from Tray**
+   - Right-click tray icon
+   - See local and network URLs
+   - Open main window or uploads folder
+
+2. **Share Network URL**
+   - Copy network URL from tray
+   - Open on other devices
+   - Transfer files between devices
+
+### API Usage
+
+For automation and integration:
+
+```bash
+# Upload file
+curl -F "files=@myfile.pdf" http://localhost:43214/api/upload
+
+# List files
+curl http://localhost:43214/api/files
+
+# Download file
+curl http://localhost:43214/api/download?file=myfile.pdf -o myfile.pdf
+
+# Delete file
+curl -X DELETE -H "Content-Type: application/json" \
+  -d '{"filename":"myfile.pdf"}' \
+  http://localhost:43214/api/delete
+```
+
+## Deployment Guides
+
+### 🚂 Railway (Cloud)
+**Best for**: 24/7 access from anywhere
+- Free tier available
+- Optional S3 for persistence
+- Custom domain support
+- [Full Guide →](RAILWAY_DEPLOY.md)
+
+### 💻 Desktop App
+**Best for**: Non-technical users
+- No terminal needed
+- System tray integration
+- Auto-start option
+- [Full Guide →](DESKTOP_APP.md)
+
+### 🏠 Self-Hosted
+**Best for**: Full control
+- Run on your own server
+- Raspberry Pi compatible
+- Docker support (coming soon)
 
 ## Technical Stack
 
-- **Next.js 16** - React framework
-- **TypeScript** - Type safety
-- **Tailwind CSS** - Styling
-- **shadcn/ui** - UI components
-- **Node.js File System** - File handling
+- **Frontend**: Next.js 16, React 19, TypeScript
+- **Styling**: Tailwind CSS 4, shadcn/ui
+- **Storage**: Local FS or AWS S3
+- **Desktop**: Electron
+- **Deployment**: Railway, Vercel, Docker
+
+## Project Structure
+
+```
+local-nas/
+├── app/
+│   ├── api/          # API routes
+│   │   ├── upload/   # File upload endpoint
+│   │   ├── download/ # File download endpoint
+│   │   ├── files/    # List files endpoint
+│   │   ├── delete/   # Delete file endpoint
+│   │   └── server-info/ # Server info endpoint
+│   ├── page.tsx      # Main UI
+│   └── layout.tsx    # App layout
+├── lib/
+│   ├── storage.ts    # Storage abstraction
+│   └── utils.ts      # Utilities
+├── components/ui/    # UI components
+├── electron.js       # Desktop app entry
+├── uploads/          # Local file storage
+├── RAILWAY_DEPLOY.md # Railway deployment guide
+├── DESKTOP_APP.md    # Desktop app guide
+└── README.md         # This file
+```
+
+## Security
+
+### Local Network Mode
+- Accessible only on your WiFi
+- No internet exposure
+- Firewall protection
+
+### Cloud Deployment
+- HTTPS encryption
+- Private S3 buckets
+- Environment variable secrets
+- Add authentication (see RAILWAY_DEPLOY.md)
+
+### Desktop App
+- Runs entirely local
+- No telemetry
+- Open source code
+
+## Troubleshooting
+
+### Can't connect from other device?
+- Ensure same WiFi network
+- Check firewall settings
+- Try the IP address shown on screen
+
+### Files not persisting on Railway?
+- Use S3 storage (see RAILWAY_DEPLOY.md)
+- Or accept ephemeral storage for temp files
+
+### Desktop app won't build?
+- Clear node_modules and rebuild
+- Check Electron version compatibility
+- See DESKTOP_APP.md troubleshooting
+
+### Port already in use?
+Edit port in:
+- `package.json` scripts
+- `electron.js` (for desktop app)
+
+## Roadmap
+
+- [ ] Docker support
+- [ ] File encryption
+- [ ] User authentication
+- [ ] File sharing links
+- [ ] Mobile apps (iOS/Android)
+- [ ] File preview (images, PDFs)
+- [ ] Folder upload/download
+- [ ] File search
+- [ ] QR code connection
+- [ ] WebRTC direct transfer
+
+## Contributing
+
+Contributions welcome! Ideas:
+- Add authentication system
+- Implement file preview
+- Add drag & drop from desktop
+- Create mobile apps
+- Improve UI/UX
+- Add tests
+
+## Cost Breakdown
+
+| Option | Setup | Monthly | Storage | Speed |
+|--------|-------|---------|---------|-------|
+| Local Network | Free | Free | Unlimited | Fastest |
+| Railway (ephemeral) | Free | Free | Temporary | Fast |
+| Railway + S3 | ~$0 | <$1 | 5GB free | Fast |
+| Desktop App | Free | Free | Unlimited | Fastest |
+| Self-Hosted | ~$5 | ~$5 | Unlimited | Fast |
+
+## Support
+
+- 📖 Read the guides: `RAILWAY_DEPLOY.md`, `DESKTOP_APP.md`
+- 🐛 Report issues: GitHub Issues
+- 💡 Request features: GitHub Discussions
+- 📧 Email: [your-email]
 
 ## License
 
-Free to use for personal projects!
+MIT License - Free for personal and commercial use!
+
+## Acknowledgments
+
+- Built with [Next.js](https://nextjs.org)
+- UI components from [shadcn/ui](https://ui.shadcn.com)
+- Icons from [Lucide](https://lucide.dev)
+- Desktop app with [Electron](https://electronjs.org)
 
 ---
 
-**Enjoy your personal local file transfer system!** 🚀
+**Made with ❤️ for easy file transfers**
+
+Start local: `npm run dev` | Deploy cloud: See `RAILWAY_DEPLOY.md` | Build app: See `DESKTOP_APP.md`

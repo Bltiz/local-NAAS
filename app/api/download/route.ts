@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readFile } from 'fs/promises';
-import { join } from 'path';
-import { existsSync } from 'fs';
+import { getStorageAdapter } from '@/lib/storage';
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,13 +10,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Filename required' }, { status: 400 });
     }
 
-    const filePath = join(process.cwd(), 'uploads', filename);
+    const storage = getStorageAdapter();
 
-    if (!existsSync(filePath)) {
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    // For S3, redirect to presigned URL
+    if (process.env.USE_S3 === 'true') {
+      const url = await storage.getDownloadUrl(filename);
+      return NextResponse.redirect(url);
     }
 
-    const fileBuffer = await readFile(filePath);
+    // For local storage, serve the file directly
+    const fileBuffer = await storage.download(filename);
 
     return new NextResponse(fileBuffer, {
       headers: {

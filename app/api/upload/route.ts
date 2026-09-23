@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile } from 'fs/promises';
-import { join } from 'path';
-import { existsSync, mkdirSync } from 'fs';
+import { getStorageAdapter } from '@/lib/storage';
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,19 +10,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No files provided' }, { status: 400 });
     }
 
-    const uploadDir = join(process.cwd(), 'uploads');
-    if (!existsSync(uploadDir)) {
-      mkdirSync(uploadDir, { recursive: true });
-    }
-
+    const storage = getStorageAdapter();
     const uploadedFiles = [];
 
     for (const file of files) {
-      const bytes = await file.arrayBuffer();
-      const buffer = Buffer.from(bytes);
-
-      const filePath = join(uploadDir, file.name);
-      await writeFile(filePath, buffer);
+      await storage.upload(file);
       
       uploadedFiles.push({
         name: file.name,

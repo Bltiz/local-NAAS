@@ -2,13 +2,22 @@
   "name": "local-nas",
   "version": "1.0.0",
   "private": true,
+  "main": "electron.js",
   "scripts": {
     "dev": "next dev -p 43214 -H 0.0.0.0",
     "build": "next build",
-    "start": "next start -p 43214 -H 0.0.0.0",
-    "lint": "eslint"
+    "start": "bash start.sh",
+    "lint": "eslint",
+    "electron": "electron .",
+    "electron-dev": "concurrently \"npm run dev\" \"wait-on http://localhost:43214 && electron .\"",
+    "electron-build": "npm run build && electron-builder",
+    "electron-build-win": "npm run build && electron-builder --win",
+    "electron-build-mac": "npm run build && electron-builder --mac",
+    "electron-build-linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1138.0",
+    "@aws-sdk/s3-request-presigner": "^3.1138.0",
     "@base-ui/react": "^1.8.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
@@ -24,9 +33,43 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^10.0.5",
+    "cross-env": "^10.1.0",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.3.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wait-on": "^9.1.0"
+  },
+  "build": {
+    "appId": "com.localnas.app",
+    "productName": "Local NAS",
+    "files": [
+      "electron.js",
+      ".next/**/*",
+      "node_modules/**/*",
+      "public/**/*",
+      "uploads/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "public"
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "public/icon.ico"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "icon": "public/icon.icns",
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "public/icon.png",
+      "category": "Utility"
+    }
   }
 }
