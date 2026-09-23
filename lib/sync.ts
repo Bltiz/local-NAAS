@@ -1,13 +1,28 @@
-// Backs up the local NAS folder to a server NAS ("chain"). Runs only in local
-// mode. It never deletes anything on this PC; with mirroring on, files removed
-// here are moved to the server's Trash (kept 30 days), not erased.
+// Keeps the local NAS folder in sync with a folder on a server NAS ("chain").
+// Runs only in local mode. Backup-only mode never touches files on this PC.
+// Two-way mode also brings server changes down. Nothing is ever erased
+// outright: replaced and deleted files go to the Trash on the side they left.
 
 import { createHash, randomBytes } from 'crypto';
-import { mkdir, open, readFile, writeFile } from 'fs/promises';
+import { createWriteStream } from 'fs';
+import { mkdir, open, readFile, unlink, writeFile } from 'fs/promises';
+import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 import { join } from 'path';
 import { lanUrls } from '@/lib/instance';
 import { rebuildableKind } from '@/lib/rebuildable';
-import { type Entry, absolutePath, getIndex, nasMode, onExternalChange, systemDir } from '@/lib/storage';
+import {
+  type Entry,
+  absolutePath,
+  getIndex,
+  makeFolder,
+  moveToTrash,
+  nasMode,
+  onExternalChange,
+  partsDir,
+  placeFile,
+  systemDir,
+} from '@/lib/storage';
 
 const INTERVAL_MS = 5 * 60 * 1000;
 const CHANGE_DEBOUNCE_MS = 30 * 1000;
@@ -27,6 +42,7 @@ export interface SyncConfig {
   enabled: boolean;
   skipRebuildable: boolean;
   mirrorDeletes: boolean;
+  twoWay: boolean;
   lastSyncAt: string | null;
 }
 
@@ -42,6 +58,9 @@ export interface SyncStatus {
   totalBytes: number;
   doneBytes: number;
   deleted: number;
+  pulled: number;
+  deletedLocal: number;
+  conflicts: number;
   unchanged: number;
   current: string | null;
   nextRunAt: string | null;
@@ -72,6 +91,9 @@ const rt: SyncRuntime = (g.__nasSync ??= {
     totalBytes: 0,
     doneBytes: 0,
     deleted: 0,
+    pulled: 0,
+    deletedLocal: 0,
+    conflicts: 0,
     unchanged: 0,
     current: null,
     nextRunAt: null,
@@ -99,6 +121,7 @@ async function loadConfig(): Promise<SyncConfig> {
     enabled: saved.enabled ?? true,
     skipRebuildable: saved.skipRebuildable ?? false,
     mirrorDeletes: saved.mirrorDeletes ?? true,
+    twoWay: saved.twoWay ?? true,
     lastSyncAt: saved.lastSyncAt ?? null,
   };
   rt.status.lastSyncAt = rt.config.lastSyncAt;
@@ -165,8 +188,9 @@ export async function connect(serverUrl: string, password: string, folder: strin
   return getSync();
 }
 
-export async function updateSync(patch: Partial<Pick<SyncConfig, 'enabled' | 'skipRebuildable' | 'mirrorDeletes' | 'folder'>>) {
+export async function updateSync(patch: Partial<Pick<SyncConfig, 'enabled' | 'skipRebuildable' | 'mirrorDeletes' | 'twoWay' | 'folder'>>) {
   const config = await loadConfig();
+  if (typeof patch.twoWay === 'boolean') config.twoWay = patch.twoWay;
   if (typeof patch.enabled === 'boolean') config.enabled = patch.enabled;
   if (typeof patch.skipRebuildable === 'boolean') config.skipRebuildable = patch.skipRebuildable;
   if (typeof patch.mirrorDeletes === 'boolean') config.mirrorDeletes = patch.mirrorDeletes;
@@ -218,7 +242,7 @@ async function api(path: string, init: RequestInit = {}): Promise<Response> {
   } catch {
     throw Object.assign(new Error('Can’t reach the server right now.'), { offline: true });
   }
-  if (res.status === 401) throw new SignedOutError('The server password changed. Reconnect to keep backing up.');
+  if (res.status === 401) throw new SignedOutError('The server password changed. Reconnect to keep syncing.');
   return res;
 }
 
@@ -239,6 +263,10 @@ async function announce() {
 }
 
 const sha256 = (data: Uint8Array) => createHash('sha256').update(data).digest('hex');
+
+// Paths whose transfer failed in the current run; they stay out of the saved
+// sync state so the next run retries them in the right direction.
+const runFailed = new Set<string>();
 
 async function hashLocal(rel: string): Promise<string> {
   const hash = createHash('sha256');
@@ -282,7 +310,10 @@ async function uploadBatch(files: Entry[], remote: (rel: string) => string) {
     if (r.ok) {
       rt.status.doneFiles++;
       rt.status.doneBytes += data[i].length;
-    } else rt.status.failedFiles++;
+    } else {
+      rt.status.failedFiles++;
+      runFailed.add(files[i].path);
+    }
   });
 }
 
@@ -319,6 +350,78 @@ async function uploadLarge(file: Entry, remotePath: string) {
   }
 }
 
+
+// What both sides looked like after the last successful run, so a difference
+// can be attributed to the side that changed. Files: [size, mtimeMs]; dirs: -1.
+interface SavedSyncState {
+  folder: string;
+  entries: Record<string, [number, number] | -1>;
+}
+
+const stateFile = () => join(systemDir(), 'sync-state.json');
+
+async function loadState(folder: string): Promise<Map<string, [number, number] | -1>> {
+  try {
+    const saved = JSON.parse(await readFile(stateFile(), 'utf8')) as SavedSyncState;
+    if (saved.folder === folder) return new Map(Object.entries(saved.entries));
+  } catch {}
+  return new Map();
+}
+
+async function saveState(folder: string, entries: Map<string, [number, number] | -1>) {
+  await mkdir(systemDir(), { recursive: true });
+  await writeFile(stateFile(), JSON.stringify({ folder, entries: Object.fromEntries(entries) } satisfies SavedSyncState));
+}
+
+const mtimeOf = (e: Entry) => new Date(e.modified).getTime();
+const sameFile = (a: { size: number; mtime: number }, b: { size: number; mtime: number }) =>
+  a.size === b.size && Math.abs(a.mtime - b.mtime) <= MTIME_TOLERANCE;
+const asFile = (e: Entry) => ({ size: e.size, mtime: mtimeOf(e) });
+const fromBase = (b: [number, number]) => ({ size: b[0], mtime: b[1] });
+
+async function pullFile(remote: Entry, rel: string, remotePath: string) {
+  rt.status.current = rel;
+  const res = await api(`/api/download?path=${encodeURIComponent(remotePath)}`);
+  if (!res.ok || !res.body) throw new Error(`Couldn’t download ${rel} (${res.status})`);
+  await mkdir(partsDir(), { recursive: true });
+  const tmp = join(partsDir(), `pull-${randomBytes(8).toString('hex')}.part`);
+  try {
+    await pipeline(Readable.fromWeb(res.body as import('stream/web').ReadableStream), createWriteStream(tmp));
+    await placeFile(tmp, rel, mtimeOf(remote));
+  } catch (error) {
+    await unlink(tmp).catch(() => {});
+    throw error;
+  }
+  rt.status.pulled++;
+  rt.status.doneBytes += remote.size;
+}
+
+// Given paths to delete on one side, removes whole folders when everything in
+// them is going away and the other side no longer has the folder.
+function collapseDeletes(paths: string[], side: Map<string, Entry>, other: Map<string, unknown>): string[] {
+  const del = new Set(paths);
+  const filesUnder = new Map<string, number>();
+  const deletedUnder = new Map<string, number>();
+  const parent = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
+  for (const e of side.values()) {
+    for (let p = parent(e.path); p; p = parent(p)) {
+      filesUnder.set(p, (filesUnder.get(p) ?? 0) + 1);
+      if (del.has(e.path)) deletedUnder.set(p, (deletedUnder.get(p) ?? 0) + 1);
+    }
+  }
+  const targets = new Set<string>();
+  for (const path of paths) {
+    let target = path;
+    for (let p = parent(path); p; p = parent(p)) {
+      if (other.has(p) || deletedUnder.get(p) !== filesUnder.get(p)) break;
+      target = p;
+    }
+    targets.add(target);
+  }
+  const sorted = Array.from(targets).sort();
+  return sorted.filter((t) => !sorted.some((o) => o !== t && t.startsWith(`${o}/`)));
+}
+
 export async function runSync(): Promise<void> {
   const config = await loadConfig();
   if (!config.serverUrl || config.token === null || !config.enabled) {
@@ -330,6 +433,7 @@ export async function runSync(): Promise<void> {
     return;
   }
   rt.running = true;
+  runFailed.clear();
   Object.assign(rt.status, {
     state: 'scanning',
     lastError: null,
@@ -339,6 +443,9 @@ export async function runSync(): Promise<void> {
     totalBytes: 0,
     doneBytes: 0,
     deleted: 0,
+    pulled: 0,
+    deletedLocal: 0,
+    conflicts: 0,
     unchanged: 0,
     current: null,
     nextRunAt: null,
@@ -347,53 +454,106 @@ export async function runSync(): Promise<void> {
   try {
     const prefix = `${config.folder}/`;
     const remotePathOf = (rel: string) => prefix + rel;
-    const skip = (e: Entry) => config.skipRebuildable && rebuildableKind(e.path, e.type === 'dir') !== null;
+    const skipPath = (path: string, isDir: boolean) => config.skipRebuildable && rebuildableKind(path, isDir) !== null;
 
-    const local = await getIndex();
-    const listRes = await api('/api/files');
+    const localAll = await getIndex();
+    const listRes = await api('/api/files?refresh=1');
     if (!listRes.ok) throw new Error(`The server returned an error (${listRes.status}).`);
-    const remote = new Map<string, Entry>();
+    const remoteAll = new Map<string, Entry>();
     for (const e of ((await listRes.json()).entries as Entry[]) ?? []) {
-      if (e.path.startsWith(prefix)) remote.set(e.path.slice(prefix.length), e);
+      if (e.path.startsWith(prefix)) remoteAll.set(e.path.slice(prefix.length), { ...e, path: e.path.slice(prefix.length) });
     }
+    const local = new Map(Array.from(localAll.values()).filter((e) => !skipPath(e.path, e.type === 'dir')).map((e) => [e.path, e]));
+    const remote = new Map(Array.from(remoteAll.values()).filter((e) => !skipPath(e.path, e.type === 'dir')).map((e) => [e.path, e]));
+    const base = await loadState(config.folder);
 
     if (local.size === 0 && remote.size > 0) {
-      throw new Error('The shared folder looks empty (is the drive connected?). Backup paused so the server copy stays safe.');
+      throw new Error('The shared folder looks empty (is the drive connected?). Sync paused so nothing gets removed.');
     }
 
-    const toUpload: Entry[] = [];
-    const toCheck: Entry[] = [];
-    const hasChildren = new Set<string>();
-    for (const e of local.values()) {
-      if (e.path.includes('/')) hasChildren.add(e.path.slice(0, e.path.lastIndexOf('/')));
-    }
-    for (const e of local.values()) {
-      if (e.type !== 'file' || skip(e)) continue;
-      const r = remote.get(e.path);
-      if (!r || r.type !== 'file' || r.size !== e.size) toUpload.push(e);
-      else if (Math.abs(new Date(r.modified).getTime() - new Date(e.modified).getTime()) > MTIME_TOLERANCE) toCheck.push(e);
-      else rt.status.unchanged++;
+    const push: Entry[] = [];
+    const pull: Entry[] = [];
+    const check: Entry[] = [];
+    const deleteRemote: string[] = [];
+    const deleteLocal: string[] = [];
+    const localFiles = new Map(Array.from(local.values()).filter((e) => e.type === 'file').map((e) => [e.path, e]));
+    const remoteFiles = new Map(Array.from(remote.values()).filter((e) => e.type === 'file').map((e) => [e.path, e]));
+
+    for (const rel of new Set([...localFiles.keys(), ...remoteFiles.keys()])) {
+      const L = localFiles.get(rel);
+      const R = remoteFiles.get(rel);
+      const b = base.get(rel);
+      const B = Array.isArray(b) ? fromBase(b) : null;
+      if (L && R) {
+        if (sameFile(asFile(L), asFile(R))) {
+          rt.status.unchanged++;
+          continue;
+        }
+        const localChanged = !B || !sameFile(asFile(L), B);
+        const remoteChanged = !B || !sameFile(asFile(R), B);
+        if (!config.twoWay || (localChanged && !remoteChanged)) push.push(L);
+        else if (remoteChanged && !localChanged) pull.push(R);
+        else if (L.size === R.size) check.push(L);
+        else {
+          rt.status.conflicts++;
+          if (mtimeOf(L) >= mtimeOf(R)) push.push(L);
+          else pull.push(R);
+        }
+      } else if (L) {
+        if (config.twoWay && B && sameFile(asFile(L), B)) deleteLocal.push(rel);
+        else push.push(L);
+      } else if (R) {
+        if (B && sameFile(asFile(R), B)) {
+          if (config.mirrorDeletes) deleteRemote.push(rel);
+        } else if (config.twoWay) pull.push(R);
+        else if (config.mirrorDeletes) deleteRemote.push(rel);
+      }
     }
 
-    for (let i = 0; i < toCheck.length; i += 300) {
-      const group = toCheck.slice(i, i + 300);
-      const items = await Promise.all(
-        group.map(async (e) => ({ path: remotePathOf(e.path), sha256: await hashLocal(e.path).catch(() => ''), mtime: new Date(e.modified).getTime() })),
-      );
+    // Same size, different dates: compare contents before deciding.
+    for (let i = 0; i < check.length; i += 300) {
+      const group = check.slice(i, i + 300);
+      const items = await Promise.all(group.map(async (e) => ({ path: remotePathOf(e.path), sha256: await hashLocal(e.path).catch(() => ''), mtime: mtimeOf(e) })));
       const res = await api('/api/files/match', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) });
       const matched = new Set<string>(res.ok ? (await res.json()).matched : []);
-      group.forEach((e) => {
-        if (matched.has(remotePathOf(e.path))) rt.status.unchanged++;
-        else toUpload.push(e);
-      });
+      for (const L of group) {
+        if (matched.has(remotePathOf(L.path))) {
+          rt.status.unchanged++;
+          const R = remoteFiles.get(L.path);
+          if (R) remoteFiles.set(L.path, { ...R, modified: L.modified });
+          continue;
+        }
+        const R = remoteFiles.get(L.path)!;
+        rt.status.conflicts++;
+        if (!config.twoWay || mtimeOf(L) >= mtimeOf(R)) push.push(L);
+        else pull.push(R);
+      }
     }
 
-    rt.status.state = 'syncing';
-    rt.status.totalFiles = toUpload.length;
-    rt.status.totalBytes = toUpload.reduce((a, e) => a + e.size, 0);
+    // Guards against mass removal when one side looks wiped.
+    const guard = (count: number, of: number, where: string) => {
+      if (count > 200 && count > of / 2) {
+        rt.status.lastError = `Skipped removing ${count.toLocaleString()} files ${where} because that’s more than half of them. Remove them yourself if that was intended.`;
+        return true;
+      }
+      return false;
+    };
+    if (guard(deleteRemote.length, remoteFiles.size, 'from the server')) deleteRemote.length = 0;
+    if (guard(deleteLocal.length, localFiles.size, 'from this PC')) deleteLocal.length = 0;
 
-    const small = toUpload.filter((e) => e.size <= SMALL_FILE);
-    const large = toUpload.filter((e) => e.size > SMALL_FILE);
+    rt.status.state = 'syncing';
+    rt.status.totalFiles = push.length + pull.length;
+    rt.status.totalBytes = push.reduce((a, e) => a + e.size, 0) + pull.reduce((a, e) => a + e.size, 0);
+
+    const onFail = (rels: string[], error: unknown) => {
+      if (error instanceof SignedOutError || (error as { offline?: boolean }).offline) throw error;
+      rt.status.failedFiles += rels.length;
+      for (const r of rels) runFailed.add(r);
+      rt.status.lastError = error instanceof Error ? error.message : 'Some files failed';
+    };
+
+    const small = push.filter((e) => e.size <= SMALL_FILE);
+    const large = push.filter((e) => e.size > SMALL_FILE);
     const batches: Entry[][] = [];
     let current: Entry[] = [];
     let bytes = 0;
@@ -408,40 +568,53 @@ export async function runSync(): Promise<void> {
     }
     if (current.length) batches.push(current);
 
-    const onFail = (count: number, error: unknown) => {
-      if (error instanceof SignedOutError || (error as { offline?: boolean }).offline) throw error;
-      rt.status.failedFiles += count;
-      rt.status.lastError = error instanceof Error ? error.message : 'Some files failed';
+    await pool(batches, (b) => uploadBatch(b, remotePathOf).catch((e) => onFail(b.map((x) => x.path), e)));
+    await pool(large, (e) => uploadLarge(e, remotePathOf(e.path)).catch((err) => onFail([e.path], err)));
+    await pool(pull, (R) => pullFile(R, R.path, remotePathOf(R.path)).catch((err) => onFail([R.path], err)));
+
+    // Empty folders: create on the side that lacks them, unless they were removed there.
+    const emptyDirs = (side: Map<string, Entry>) => {
+      const hasChildren = new Set<string>();
+      for (const e of side.values()) if (e.path.includes('/')) hasChildren.add(e.path.slice(0, e.path.lastIndexOf('/')));
+      return Array.from(side.values()).filter((e) => e.type === 'dir' && !hasChildren.has(e.path));
     };
-    await pool(batches, (b) => uploadBatch(b, remotePathOf).catch((e) => onFail(b.length, e)));
-    await pool(large, (e) => uploadLarge(e, remotePathOf(e.path)).catch((err) => onFail(1, err)));
-
-    for (const e of local.values()) {
-      if (e.type === 'dir' && !hasChildren.has(e.path) && !remote.has(e.path) && !skip(e)) {
-        await api('/api/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: remotePathOf(e.path) }) });
+    for (const d of emptyDirs(local)) {
+      if (remote.has(d.path)) continue;
+      if (base.get(d.path) === -1 && config.twoWay) deleteLocal.push(d.path);
+      else await api('/api/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: remotePathOf(d.path) }) });
+    }
+    if (config.twoWay) {
+      for (const d of emptyDirs(remote)) {
+        if (local.has(d.path)) continue;
+        if (base.get(d.path) === -1) {
+          if (config.mirrorDeletes) deleteRemote.push(d.path);
+        } else await makeFolder(d.path).catch(() => {});
       }
     }
 
-    if (config.mirrorDeletes) {
-      const gone = Array.from(remote.keys())
-        .filter((rel) => !local.has(rel) && !(config.skipRebuildable && rebuildableKind(rel, remote.get(rel)!.type === 'dir')))
-        .sort();
-      const remoteFiles = Array.from(remote.values()).filter((e) => e.type === 'file').length;
-      const goneFiles = gone.filter((rel) => remote.get(rel)!.type === 'file').length;
-      if (goneFiles > 200 && goneFiles > remoteFiles / 2) {
-        rt.status.lastError = `Skipped removing ${goneFiles.toLocaleString()} files from the server because that’s more than half the backup. Delete them there yourself if that was intended.`;
-        gone.length = 0;
-      }
-      const removed: string[] = [];
-      for (const rel of gone) {
-        if (removed.some((d) => rel.startsWith(`${d}/`))) continue;
-        const res = await api(`/api/files?path=${encodeURIComponent(remotePathOf(rel))}`, { method: 'DELETE' });
-        if (res.ok) {
-          removed.push(rel);
-          rt.status.deleted++;
-        }
-      }
+    for (const rel of collapseDeletes(deleteRemote, remote, local)) {
+      const res = await api(`/api/files?path=${encodeURIComponent(remotePathOf(rel))}`, { method: 'DELETE' });
+      if (res.ok) rt.status.deleted++;
     }
+    for (const rel of collapseDeletes(deleteLocal, local, remote)) {
+      await moveToTrash(rel, 'deleted')
+        .then(() => rt.status.deletedLocal++)
+        .catch(() => {});
+    }
+
+    // Record the agreed state; failed paths keep their previous record.
+    const after = await getIndex();
+    const next = new Map<string, [number, number] | -1>();
+    for (const e of after.values()) {
+      if (skipPath(e.path, e.type === 'dir')) continue;
+      if (runFailed.has(e.path)) {
+        const prev = base.get(e.path);
+        if (prev !== undefined) next.set(e.path, prev);
+        continue;
+      }
+      next.set(e.path, e.type === 'dir' ? -1 : [e.size, mtimeOf(e)]);
+    }
+    await saveState(config.folder, next);
 
     config.lastSyncAt = new Date().toISOString();
     rt.status.lastSyncAt = config.lastSyncAt;
@@ -458,7 +631,7 @@ export async function runSync(): Promise<void> {
     } else {
       rt.status.state = 'error';
     }
-    rt.status.lastError = error instanceof Error ? error.message : 'Backup failed';
+    rt.status.lastError = error instanceof Error ? error.message : 'Sync failed';
   } finally {
     rt.running = false;
     rt.status.current = null;

@@ -18,6 +18,7 @@ interface SyncResponse {
     enabled: boolean;
     skipRebuildable: boolean;
     mirrorDeletes: boolean;
+    twoWay: boolean;
     lastSyncAt: string | null;
     connected: boolean;
   };
@@ -31,6 +32,9 @@ interface SyncResponse {
     totalBytes: number;
     doneBytes: number;
     deleted: number;
+    pulled: number;
+    deletedLocal: number;
+    conflicts: number;
     unchanged: number;
     current: string | null;
   };
@@ -103,18 +107,19 @@ export function BackupPanel({ defaultFolder }: { defaultFolder: string }) {
   return (
     <section aria-labelledby="backup-title" className="rounded-2xl border border-border bg-card/60 p-4 backdrop-blur sm:p-5">
       <h2 id="backup-title" className="flex items-center gap-2 font-semibold">
-        <CloudUpload className="size-4 text-sky-300" /> Backup to server
+        <CloudUpload className="size-4 text-sky-300" /> Sync with server
       </h2>
       <p className="mt-1 text-xs text-muted-foreground">
-        Keeps a copy of this PC’s shared folder on your Railway NAS. Only new and changed files are sent, and nothing on this PC is ever
-        deleted.
+        {data.config.twoWay
+          ? 'Keeps this PC’s shared folder and a folder on your Railway NAS the same, in both directions. Replaced or deleted files go to Trash on the side they left.'
+          : 'Keeps a copy of this PC’s shared folder on your Railway NAS. Only new and changed files are sent, and nothing on this PC is changed.'}
       </p>
 
       {showForm ? (
         <form onSubmit={connect} className="mt-4 space-y-3">
           {status.state === 'signed-out' && (
             <p className="flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
-              <AlertTriangle className="size-4 shrink-0 text-amber-300" /> The server password changed. Enter it again to keep backing up.
+              <AlertTriangle className="size-4 shrink-0 text-amber-300" /> The server password changed. Enter it again to keep syncing.
             </p>
           )}
           <div className="space-y-1.5">
@@ -138,7 +143,7 @@ export function BackupPanel({ defaultFolder }: { defaultFolder: string }) {
           </div>
           {formError && <p className="text-xs text-destructive">{formError}</p>}
           <Button type="submit" disabled={busy} className="w-full">
-            {busy && <Loader2 className="animate-spin" />} Connect and back up
+            {busy && <Loader2 className="animate-spin" />} Connect and sync
           </Button>
         </form>
       ) : (
@@ -148,7 +153,9 @@ export function BackupPanel({ defaultFolder }: { defaultFolder: string }) {
               <>
                 <p className="flex items-center gap-2 font-medium">
                   <Loader2 className="size-4 animate-spin text-sky-300" />
-                  {status.state === 'scanning' ? 'Checking for changes…' : `Backing up ${status.doneFiles.toLocaleString()} of ${status.totalFiles.toLocaleString()} files`}
+                  {status.state === 'scanning'
+                    ? 'Checking for changes…'
+                    : `Syncing ${(status.doneFiles + status.pulled).toLocaleString()} of ${status.totalFiles.toLocaleString()} files`}
                 </p>
                 {status.state === 'syncing' && (
                   <>
@@ -174,13 +181,16 @@ export function BackupPanel({ defaultFolder }: { defaultFolder: string }) {
               </p>
             ) : (
               <p className="flex items-center gap-2 text-emerald-300">
-                <CheckCircle2 className="size-4" /> Backed up {formatAgo(status.lastSyncAt)}
+                <CheckCircle2 className="size-4" /> {config.twoWay ? 'In sync' : 'Backed up'} {formatAgo(status.lastSyncAt)}
               </p>
             )}
-            {!active && status.state === 'idle' && (status.totalFiles > 0 || status.deleted > 0) && (
+            {!active && status.state === 'idle' && (status.totalFiles > 0 || status.deleted > 0 || status.deletedLocal > 0) && (
               <p className="mt-1 text-xs text-muted-foreground">
                 Last run: {status.doneFiles.toLocaleString()} sent
-                {status.deleted > 0 && `, ${status.deleted.toLocaleString()} removed (in server Trash)`}
+                {status.pulled > 0 && `, ${status.pulled.toLocaleString()} received`}
+                {status.deleted > 0 && `, ${status.deleted.toLocaleString()} removed on the server`}
+                {status.deletedLocal > 0 && `, ${status.deletedLocal.toLocaleString()} removed here (in Trash)`}
+                {status.conflicts > 0 && `, ${status.conflicts.toLocaleString()} changed on both sides (newer kept, older in version history)`}
                 {status.failedFiles > 0 && `, ${status.failedFiles.toLocaleString()} failed`}
               </p>
             )}
@@ -193,8 +203,15 @@ export function BackupPanel({ defaultFolder }: { defaultFolder: string }) {
 
           <div className="space-y-2 text-sm">
             <label className="flex items-center justify-between gap-3">
-              <span>Back up automatically</span>
+              <span>Sync automatically</span>
               <Switch checked={config.enabled} onCheckedChange={(v) => update({ enabled: v })} />
+            </label>
+            <label className="flex items-center justify-between gap-3">
+              <span>
+                Two-way sync
+                <span className="block text-xs text-muted-foreground">Also bring changes made on the server to this PC</span>
+              </span>
+              <Switch checked={config.twoWay} onCheckedChange={(v) => update({ twoWay: v })} />
             </label>
             <label className="flex items-center justify-between gap-3">
               <span>
@@ -206,7 +223,7 @@ export function BackupPanel({ defaultFolder }: { defaultFolder: string }) {
             <label className="flex items-center justify-between gap-3">
               <span>
                 Mirror deletions
-                <span className="block text-xs text-muted-foreground">Files deleted here go to the server’s Trash</span>
+                <span className="block text-xs text-muted-foreground">Files deleted on one side go to the other side’s Trash</span>
               </span>
               <Switch checked={config.mirrorDeletes} onCheckedChange={(v) => update({ mirrorDeletes: v })} />
             </label>
@@ -214,7 +231,7 @@ export function BackupPanel({ defaultFolder }: { defaultFolder: string }) {
 
           <div className="flex flex-wrap gap-2">
             <Button size="sm" disabled={active} onClick={() => post({ action: 'run' }).then(setData).then(() => setTimeout(refresh, 800))}>
-              <RefreshCw /> Back up now
+              <RefreshCw /> Sync now
             </Button>
             <Button
               size="sm"

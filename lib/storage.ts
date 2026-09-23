@@ -47,7 +47,7 @@ export function rootDir(): string {
 }
 
 export const systemDir = () => join(rootDir(), SYSTEM_DIR);
-const partsDir = () => join(systemDir(), 'parts');
+export const partsDir = () => join(systemDir(), 'parts');
 const trashDir = () => join(systemDir(), 'trash');
 
 // Client paths are always "/"-separated and relative to the storage root.
@@ -357,7 +357,7 @@ export async function deleteFromTrash(ids: string[] | 'all'): Promise<void> {
 
 // Moves a finished temp file into place. An existing file at the target goes to
 // the trash (so the folder stays a clean mirror without losing the old version).
-async function placeFile(tmpAbs: string, relPath: string, mtimeMs: number | null): Promise<string> {
+export async function placeFile(tmpAbs: string, relPath: string, mtimeMs: number | null): Promise<string> {
   let target = normalizeRelPath(relPath);
   const existing = await statOrNull(absolutePath(target));
   if (existing?.isDirectory()) target = await uniquePath(target);
