@@ -43,20 +43,31 @@ export async function fromEntries(entries: FileSystemEntry[], onProgress?: (foun
   const queue: { entry: FileSystemEntry; prefix: string }[] = entries.map((entry) => ({ entry, prefix: '' }));
   let lastReport = 0;
 
+  const addFiles = async (entries: FileSystemEntry[], prefix: string) => {
+    for (let i = 0; i < entries.length; i += 64) {
+      const files = await Promise.all(entries.slice(i, i + 64).map((e) => entryFile(e as FileSystemFileEntry)));
+      files.forEach((file, j) => {
+        const name = entries[i + j].name;
+        out.files.push({ file, relPath: prefix ? `${prefix}/${name}` : name });
+      });
+      if (onProgress && out.files.length - lastReport >= 250) {
+        lastReport = out.files.length;
+        onProgress(out.files.length);
+      }
+    }
+  };
+
   const worker = async () => {
     for (let job = queue.shift(); job; job = queue.shift()) {
       const { entry, prefix } = job;
-      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isFile) {
-        out.files.push({ file: await entryFile(entry as FileSystemFileEntry), relPath: path });
-        if (onProgress && out.files.length - lastReport >= 250) {
-          lastReport = out.files.length;
-          onProgress(out.files.length);
-        }
+        await addFiles([entry], prefix);
       } else if (entry.isDirectory) {
+        const path = prefix ? `${prefix}/${entry.name}` : entry.name;
         const children = await readAllEntries((entry as FileSystemDirectoryEntry).createReader());
         if (children.length === 0) out.emptyDirs.push(path);
-        for (const child of children) queue.push({ entry: child, prefix: path });
+        await addFiles(children.filter((c) => c.isFile), path);
+        for (const child of children) if (child.isDirectory) queue.push({ entry: child, prefix: path });
       }
     }
   };

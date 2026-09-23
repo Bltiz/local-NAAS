@@ -73,6 +73,22 @@ function randomHex(bytes: number): string {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Each File read holds a browser file handle; thousands at once can crash the tab.
+const MAX_OPEN_READS = 32;
+let openReads = 0;
+const readWaiters: (() => void)[] = [];
+
+async function readFile(blob: Blob): Promise<ArrayBuffer> {
+  while (openReads >= MAX_OPEN_READS) await new Promise<void>((r) => readWaiters.push(r));
+  openReads++;
+  try {
+    return await blob.arrayBuffer();
+  } finally {
+    openReads--;
+    readWaiters.shift()?.();
+  }
+}
 const storedPath = (item: Internal) => (item.encrypted ? item.path + ENCRYPTED_SUFFIX : item.path);
 
 const EMPTY: UploadSnapshot = {
@@ -273,7 +289,7 @@ export class Uploader {
     this.notify(true);
     try {
       const hashed = await Promise.all(
-        live.map(async (i) => ({ item: i, sha256: await sha256Hex(await i.file.arrayBuffer()) })),
+        live.map(async (i) => ({ item: i, sha256: await sha256Hex(await readFile(i.file)) })),
       );
       const res = await fetch('/api/files/match', {
         method: 'POST',
@@ -317,7 +333,7 @@ export class Uploader {
     try {
       const encoded = await Promise.all(
         items.map(async (item) => {
-          let data: Uint8Array<ArrayBuffer> = new Uint8Array(await item.file.arrayBuffer());
+          let data: Uint8Array<ArrayBuffer> = new Uint8Array(await readFile(item.file));
           if (item.session) {
             const enc = await FileEncryptor.create(item.session);
             const cipher = new Uint8Array(await enc.encryptChunk(data.buffer, 0, true));
@@ -435,7 +451,7 @@ export class Uploader {
           continue;
         }
         const chunkTotal = Math.max(1, Math.ceil(file.size / ENC_CHUNK));
-        const plain = await file.slice(index * ENC_CHUNK, (index + 1) * ENC_CHUNK).arrayBuffer();
+        const plain = await readFile(file.slice(index * ENC_CHUNK, (index + 1) * ENC_CHUNK));
         const cipher = new Uint8Array(await encryptor.encryptChunk(plain, index, index === chunkTotal - 1));
         if (index === 0) {
           const joined = new Uint8Array(HEADER_LEN + cipher.length);
@@ -446,7 +462,7 @@ export class Uploader {
           body = cipher.buffer;
         }
       } else {
-        body = await file.slice(offset, Math.min(offset + CHUNK, total)).arrayBuffer();
+        body = await readFile(file.slice(offset, Math.min(offset + CHUNK, total)));
       }
 
       const sha = await sha256Hex(body);

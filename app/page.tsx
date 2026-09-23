@@ -233,11 +233,29 @@ export default function Home() {
     });
   };
 
-  const showPlan = (picked: Picked, target: Peer | null = null) => {
+  // Compares against a fresh listing from disk, so a stale list can never cause a file to be skipped.
+  const showPlan = async (picked: Picked, target: Peer | null = null) => {
+    if (picked.files.length === 0 && picked.emptyDirs.length === 0) return setScanning(null);
+    let current: FileEntry[] = [];
+    if (!target) {
+      setScanning((n) => n ?? picked.files.length);
+      try {
+        const res = await fetch('/api/files?refresh=1', { cache: 'no-store' });
+        if (res.status === 401) return signOutRedirect();
+        if (!res.ok) throw new Error();
+        const data = (await res.json()) as ListResponse;
+        setEntries(data.entries);
+        setUsage(data.usage);
+        current = data.entries;
+      } catch {
+        setScanning(null);
+        toast.error('Couldn’t check what’s already on the NAS. Try again.');
+        return;
+      }
+    }
     setScanning(null);
-    if (picked.files.length === 0 && picked.emptyDirs.length === 0) return;
     setPlanTarget(target);
-    setPlan(buildPlan(picked, target ? '' : dir, target ? [] : (entries ?? []), !target && encryptUploads && session !== null));
+    setPlan(buildPlan(picked, target ? '' : dir, current, !target && encryptUploads && session !== null));
   };
 
   const scanDrop = (dropped: FileSystemEntry[], target: Peer | null) => {
