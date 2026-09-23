@@ -42,10 +42,10 @@ export function nasMode(): NasMode {
 }
 
 export function rootDir(): string {
-  return resolve(process.env.UPLOAD_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || join(process.cwd(), 'uploads'));
+  return resolve(/*turbopackIgnore: true*/ process.env.UPLOAD_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || join(process.cwd(), 'uploads'));
 }
 
-const systemDir = () => join(rootDir(), SYSTEM_DIR);
+export const systemDir = () => join(rootDir(), SYSTEM_DIR);
 const partsDir = () => join(systemDir(), 'parts');
 const trashDir = () => join(systemDir(), 'trash');
 
@@ -67,7 +67,9 @@ export function normalizeRelPath(input: string | null | undefined): string {
 export function absolutePath(relPath: string): string {
   const root = rootDir();
   const abs = resolve(root, ...normalizeRelPath(relPath).split('/'));
-  if (!abs.startsWith(root + sep)) throw new StorageError('Invalid path', 400);
+  // A drive root like "D:\" already ends with the separator.
+  const base = root.endsWith(sep) ? root : root + sep;
+  if (!abs.startsWith(base)) throw new StorageError('Invalid path', 400);
   return abs;
 }
 
@@ -82,10 +84,18 @@ interface IndexState {
   building: Promise<Map<string, Entry>> | null;
   dirty: boolean;
   watcher: FSWatcher | null;
+  changeListeners: Set<() => void>;
 }
 
 const g = globalThis as unknown as { __nasIndex?: IndexState };
-const index: IndexState = (g.__nasIndex ??= { entries: null, building: null, dirty: true, watcher: null });
+const index: IndexState = (g.__nasIndex ??= { entries: null, building: null, dirty: true, watcher: null, changeListeners: new Set() });
+
+// Called when files change outside the app (local mode watcher).
+export function onExternalChange(listener: () => void): () => void {
+  startWatcher();
+  index.changeListeners.add(listener);
+  return () => index.changeListeners.delete(listener);
+}
 
 async function walkTree(): Promise<Map<string, Entry>> {
   const root = rootDir();
@@ -119,6 +129,7 @@ function startWatcher() {
       const name = String(filename ?? '').replaceAll('\\', '/');
       if (name === SYSTEM_DIR || name.startsWith(`${SYSTEM_DIR}/`)) return;
       index.dirty = true;
+      for (const listener of index.changeListeners) listener();
     });
     index.watcher.on('error', () => {
       index.watcher = null;

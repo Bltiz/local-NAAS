@@ -66,32 +66,4 @@ export async function fromEntries(entries: FileSystemEntry[], onProgress?: (foun
   return out;
 }
 
-// Folders that tools recreate on demand. Shown in the upload summary so they can be skipped.
-export const REBUILDABLE = new Map<string, string>([
-  ['node_modules', 'npm install'],
-  ['.next', 'next build'],
-  ['.nuxt', 'nuxt build'],
-  ['.svelte-kit', 'svelte-kit sync'],
-  ['.turbo', 'turbo cache'],
-  ['.parcel-cache', 'parcel cache'],
-  ['.vite', 'vite cache'],
-  ['.cache', 'tool cache'],
-  ['dist', 'build output'],
-  ['build', 'build output'],
-  ['coverage', 'test coverage'],
-  ['__pycache__', 'Python cache'],
-  ['.pytest_cache', 'pytest cache'],
-  ['.mypy_cache', 'mypy cache'],
-  ['.venv', 'Python virtualenv'],
-  ['venv', 'Python virtualenv'],
-  ['target', 'Rust/Java build output'],
-  ['.gradle', 'Gradle cache'],
-  ['Pods', 'pod install'],
-  ['DerivedData', 'Xcode build'],
-]);
-
-export function rebuildableKind(relPath: string): string | null {
-  const segments = relPath.split('/');
-  for (let i = 0; i < segments.length - 1; i++) if (REBUILDABLE.has(segments[i])) return segments[i];
-  return null;
-}
+export { REBUILDABLE, rebuildableKind } from '@/lib/rebuildable';

@@ -1,6 +1,7 @@
 import { encryptedSize } from '@/lib/client/crypto';
 import type { FileEntry } from '@/lib/client/download';
-import { type Picked, rebuildableKind } from '@/lib/client/pick';
+import type { Picked } from '@/lib/client/pick';
+import { rebuildableKind } from '@/lib/rebuildable';
 import { ENCRYPTED_SUFFIX, type PendingUpload } from '@/lib/client/upload';
 
 export type PlanStatus = 'new' | 'changed' | 'check' | 'same';
@@ -102,7 +103,7 @@ export function planUploads(plan: UploadPlan, skip: Set<string>): { uploads: Pen
     uploads.push({ file: f.file, path: f.path, verify: f.status === 'check' });
   }
   const dirs = plan.emptyDirs.filter((d) => {
-    const kind = rebuildableKind(`${d}/x`);
+    const kind = rebuildableKind(d, true);
     return !kind || !skip.has(kind);
   });
   return { uploads, dirs };

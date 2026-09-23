@@ -43,3 +43,6 @@ next-env.d.ts
 
 # uploaded files
 /uploads
+
+# Local NAS launcher settings (contains the local password)
+/local-nas.config.json

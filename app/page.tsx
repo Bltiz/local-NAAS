@@ -16,10 +16,12 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { BackupPanel } from '@/components/nas/backup-panel';
 import { DevicesPanel } from '@/components/nas/devices-panel';
 import { EncryptionDialog } from '@/components/nas/encryption-dialog';
 import { FileBrowser } from '@/components/nas/file-browser';
 import { formatBytes } from '@/components/nas/format';
+import { type InstanceInfo, LocationSwitcher } from '@/components/nas/location-switcher';
 import { PlanDialog, type SpeedHistory } from '@/components/nas/plan-dialog';
 import { PreviewDialog } from '@/components/nas/preview-dialog';
 import { StoragePanel, type StorageInfo } from '@/components/nas/storage-panel';
@@ -77,6 +79,7 @@ export default function Home() {
   const [plan, setPlan] = useState<UploadPlan | null>(null);
   const [planTarget, setPlanTarget] = useState<Peer | null>(null);
   const [speed, setSpeed] = useState<SpeedHistory | null>(null);
+  const [instance, setInstance] = useState<InstanceInfo | null>(null);
   const savedBuffer = useRef<SavedFile[]>([]);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -166,6 +169,10 @@ export default function Home() {
     fetch('/api/auth-status')
       .then((res) => res.json())
       .then((data) => setPasswordProtected(data.mode === 'protected'))
+      .catch(() => {});
+    fetch('/api/instance', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => data && setInstance(data))
       .catch(() => {});
   }, []);
 
@@ -388,6 +395,7 @@ export default function Home() {
             )}
           </div>
           <div className="ml-auto flex items-center gap-2">
+            <LocationSwitcher info={instance} />
             <Button variant="outline" size="sm" onClick={() => setEncOpen(true)} className={session ? 'border-emerald-400/40 text-emerald-200' : ''}>
               {session ? <LockOpen /> : <Lock />}
               <span className="hidden sm:inline">{session ? (encryptUploads ? 'Encrypting uploads' : 'Unlocked') : 'Encryption'}</span>
@@ -412,7 +420,7 @@ export default function Home() {
         <section aria-label="Cloud files" className="flex min-w-0 flex-col rounded-2xl border border-border bg-card/60 p-4 backdrop-blur sm:p-5">
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <h2 className="mr-auto flex items-center gap-2 font-semibold">
-              <UploadCloud className="size-4 text-violet-300" /> Cloud files
+              <UploadCloud className="size-4 text-violet-300" /> {instance?.self.mode === 'local' ? `Files on ${instance.self.name}` : 'Cloud files'}
               {encryptUploads && session && (
                 <Badge variant="secondary" className="gap-1 text-emerald-200">
                   <Lock className="size-3" /> Encrypted uploads
@@ -458,6 +466,7 @@ export default function Home() {
         </section>
 
         <aside className="flex min-w-0 flex-col gap-6">
+          {instance?.self.mode === 'local' && <BackupPanel defaultFolder={instance.self.name} />}
           <DevicesPanel
             snapshot={directSnapshot}
             onSend={sendDirect}
