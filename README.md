@@ -1,95 +1,100 @@
 # Local NAS
 
-A private file hub you run yourself. Upload files and whole folders to your own server, browse and search them, preview them in the browser, optionally encrypt them end to end, and send files straight from one device to another over WebRTC.
+A private file hub you run yourself, in two places that work together:
 
-Built with Next.js 16, React 19, TypeScript, Tailwind CSS 4, and shadcn/ui. Deploys to Railway with a persistent volume.
+- **Server:** runs 24/7 on Railway, reachable from anywhere.
+- **Local:** runs on your Windows PC and shares a folder you choose (for example your Projects folder) straight from disk, at Wi-Fi speed, with no copying. It can back that folder up to the server automatically.
+
+Built with Next.js 16, React 19, TypeScript, Tailwind CSS 4, and shadcn/ui.
 
 ## Features
 
-- **Folder uploads that keep everything.** Pick or drag in whole folders. Subfolders, empty folders, hidden files (like `.env`), and non-English names are all preserved. Nothing is zipped.
-- **Fast, safe uploads.** Files upload in 8 MB chunks, 6 files at a time. Every chunk is checked with SHA-256 on the server, failed chunks retry automatically, and an interrupted large file resumes where it stopped. Existing files are never overwritten; clashes become `name (1)`.
-- **Browse and search.** Folder navigation with breadcrumbs, plus instant search by name across every folder.
-- **Preview.** Images, video and audio (with seeking), PDFs, and text or code files open right in the app.
-- **End-to-end encryption (optional).** Turn it on with a passphrase and files are encrypted in your browser (AES-256-GCM) before they upload. The server only stores scrambled data. Encrypted files can still be previewed and downloaded after you unlock them.
-- **Send directly (WebRTC).** Any device with the app open appears under **Send directly**. Files go device to device without touching the server, which is the fastest option on the same Wi-Fi.
-- **Download whole folders.** In Chrome or Edge on a computer, "Download folder" writes the full folder structure to a location you choose.
-- **Password protected.** One password (`NAS_PASSWORD`) guards everything. Installable as an app from Chrome, Edge, or Safari.
+- **Folder uploads that mirror your PC.** Pick or drag in whole folders. Structure, empty folders, hidden files like `.env`, `.git` history, and non-English names are all kept. Uploading a folder that already exists merges into it: unchanged files are skipped, changed files replace the old version (which goes to Trash), and nothing is ever duplicated as `name (1)`.
+- **Fast with huge folders.** A summary appears before anything uploads, with new, changed, and unchanged counts, total size, a free-space check, and a time estimate. Small files travel hundreds at a time in one request and are unpacked into normal files on the NAS, every file checksum-verified. Large files go in resumable 8 MB chunks. Re-dropping a folder after an interruption only sends what's missing.
+- **Rebuildable folders are your choice.** `node_modules`, `.next`, `dist`, `venv` and similar folders are detected and listed with their size. They're included by default, and one switch skips them.
+- **Trash.** Deleted files and replaced old versions are kept for 30 days and can be restored. Deleting shows an Undo button.
+- **Browse, search, preview.** Folder navigation, instant search by name across every folder, and previews for images, video, audio, PDFs, and text or code.
+- **Storage view.** Space used per folder, the disk or volume capacity, and a warning if Railway isn't storing files on a volume.
+- **End-to-end encryption (optional).** Files are encrypted in the browser (AES-256-GCM) before upload.
+- **Send directly (WebRTC).** Device to device with no server in between; fastest on the same Wi-Fi.
+- **Server/Local switch.** One click in the header moves between your Railway server and your PC's local NAS.
+- **Automatic backup (local → server).** Your PC keeps a copy of its shared folder on the server: only new and changed files, a few seconds after they change and every 5 minutes. Files deleted on the PC go to the server's Trash. Nothing on the PC is ever deleted by the backup.
+- **Password protected** and installable as an app.
 
-## Run it locally
+## Run the local NAS on Windows
 
-Requires Node.js 22.
+1. **Install Node.js** (once). Open PowerShell and run:
+
+   ```powershell
+   winget install OpenJS.NodeJS.LTS
+   ```
+
+2. **Get the code onto Windows**, not WSL: WSL's networking hides servers from your laptop, and reading Windows folders from WSL is slow. Either:
+   - download the ZIP from GitHub (**Code → Download ZIP**) and extract it to a folder such as `C:\LocalNAS`, or
+   - with Git for Windows: `git clone https://github.com/Bltiz/local-NAAS.git C:\LocalNAS`
+
+3. **Double-click `Start Local NAS.bat`.** The first time it asks:
+   - which folder to share (your files stay where they are),
+   - a password for signing in,
+   - a name for this PC.
+
+   It then installs and builds (a minute or two the first time), starts the NAS, opens it in your browser, and prints the address for your laptop, such as `http://192.168.1.20:43214`.
+
+4. When Windows asks whether Node.js may use the network, allow **Private networks**.
+
+Keep the window open while you want the NAS running. To change the folder or password later, run `Start Local NAS.bat -Setup` from a terminal. Settings are saved in `local-nas.config.json` next to the launcher, which is not committed to Git.
+
+The app keeps its own data (Trash, backup settings, partial uploads) in a hidden `.nas-system` folder inside the shared folder.
+
+### Back up the local NAS to the server
+
+On the PC's NAS page, fill in **Backup to server**: your Railway address, the server's password, and the folder name to use on the server (defaults to the PC's name). The first backup starts right away. After that the PC appears in the server's location menu as **Online**, with its Wi-Fi address.
+
+Safety: if the shared folder ever looks empty (for example an unplugged drive), backup pauses instead of mirroring that. It also refuses to remove more than half of the server copy in one run.
+
+## Run it on a Mac, Linux, or in development
 
 ```bash
 npm install
-npm run dev
+npm run dev                                                # server mode, files in ./uploads
+NAS_MODE=local UPLOAD_DIR=~/Projects NAS_PASSWORD=pick-one npm run dev   # local mode
 ```
 
-Open http://localhost:43214. Other devices on your Wi-Fi can use `http://<this-computer's-IP>:43214`.
+Open http://localhost:43214.
 
-To require a password locally:
+## Deploy the server to Railway
 
-```bash
-# Mac / Linux / WSL
-NAS_PASSWORD=choose-a-long-password npm run dev
+See [RAILWAY_DEPLOY.md](RAILWAY_DEPLOY.md). In short: deploy from GitHub, attach a volume, and set `NAS_PASSWORD` on the service. The volume is detected automatically. You can also set `UPLOAD_DIR` to its mount path.
 
-# Windows PowerShell
-$env:NAS_PASSWORD="choose-a-long-password"; npm run dev
-```
+## Settings
 
-Without `NAS_PASSWORD`, anyone on your network can use it. Files are stored in `./uploads` unless you set `UPLOAD_DIR`.
-
-## Deploy to Railway
-
-See [RAILWAY_DEPLOY.md](RAILWAY_DEPLOY.md). In short: deploy from GitHub, attach a volume at `/data`, and set these variables on the service:
-
-| Variable | Value |
-| --- | --- |
-| `NAS_PASSWORD` | Your sign-in password (required; the app stays locked without it) |
-| `UPLOAD_DIR` | `/data` (the volume mount path, so files survive restarts) |
+| Variable | Where | Meaning |
+| --- | --- | --- |
+| `NAS_PASSWORD` | both | Sign-in password. Required on Railway; the app stays locked without it. |
+| `UPLOAD_DIR` | both | Folder to store or share. Defaults to the Railway volume, else `./uploads`. |
+| `NAS_MODE` | local | `local` turns on local mode (file watching, backup, PC name). The launcher sets it. |
+| `NAS_NAME` | local | Name shown for the PC. |
+| `PORT` | both | Port, default `43214`. |
 
 ## Install it as an app
 
-Open your site, sign in, then:
+Open it, sign in, then in Chrome click **Install** in the address bar (Edge: ⋯ → Apps → Install this site as an app; iPhone: Share → Add to Home Screen). Install both the server and the local NAS if you like; each is its own app.
 
-- **Chrome:** click **Install** at the right end of the address bar.
-- **Edge:** ⋯ → **Apps** → **Install this site as an app**.
-- **iPhone (Safari):** Share → **Add to Home Screen**.
-- **Android (Chrome):** ⋮ → **Add to Home screen** → **Install**.
+## How it works
 
-## How the pieces work
-
-**Uploads.** The browser sends each file in 8 MB chunks with a SHA-256 checksum header to `PUT /api/upload`. The server appends chunks in order to a temporary file under `.nas-system/parts/`, rejects any chunk whose checksum or position is wrong, and moves the finished file into place in one step. Half-uploaded files never appear in your file list.
-
-**Encryption.** Your passphrase is stretched with PBKDF2-SHA256 (600,000 rounds), and each file gets its own key. Files are split into 8 MB blocks, each sealed with AES-256-GCM; the last block is marked so a cut-short file is detected. The passphrase stays in the browser tab and is forgotten when the tab closes. There is no recovery if you forget it. File and folder **names** are not encrypted.
-
-**Direct transfer.** Each open tab registers over a server-sent event stream (`/api/rtc/events`). When you send, the two browsers exchange connection details through the server and then open a WebRTC data channel between themselves. Files stream in order with flow control, the receiver writes straight to disk (Chrome/Edge) or downloads each file (other browsers), and each file's byte count is verified. The badge shows the path: **Same network**, **Direct over internet**, or **Relayed**. Some strict networks (certain mobile carriers and office Wi-Fi) block direct connections; use a cloud upload in that case.
-
-## Project layout
-
-```
-app/
-  page.tsx               Main screen (files, uploads, Send directly)
-  login/page.tsx         Sign-in screen
-  api/files              List (GET), new folder (POST), delete (DELETE)
-  api/upload             Chunked upload (PUT), resume status (GET), cancel (DELETE)
-  api/download           Download and preview with Range support
-  api/rtc/events         Device presence and signaling stream (SSE)
-  api/rtc/signal         Relay a WebRTC message to another device
-  api/login, logout, auth-status
-components/nas/          File browser, preview, uploads, devices, encryption UI
-lib/storage.ts           Safe paths, chunk writes, listing, range reads
-lib/auth.ts              Password sessions
-lib/signal.ts            In-memory signaling hub
-lib/client/              Browser code: upload engine, crypto, downloads, WebRTC, folder picking
-proxy.ts                 Redirects signed-out visitors to /login
-```
+- **Uploads:** small files are packed into one request (`PUT /api/upload/batch`) with a SHA-256 checksum per file. Large files go through `PUT /api/upload` in 8 MB chunks, which resume after interruptions. Files are written to `.nas-system/parts` first and moved into place only once complete. The original modified date is kept, which is how unchanged files are recognized later. Same-size files with different dates are compared by checksum (`POST /api/files/match`).
+- **Trash:** replaced and deleted items move to `.nas-system/trash` with a small record of where they came from.
+- **Index:** the server keeps an in-memory index of all files so listing 100,000+ files is instant. In local mode a file watcher keeps it current when you change files outside the app.
+- **Backup:** the local NAS compares its index with the server's list, then uses the same batch, chunk, and match endpoints with the server password's session. It announces itself to the server (`POST /api/instances`) so the server can show it in the location menu.
+- **Encryption:** PBKDF2-SHA256 (600,000 rounds) plus AES-256-GCM in 8 MB blocks. The passphrase stays in the browser tab. Names aren't encrypted, and backups made by the local NAS are not end-to-end encrypted.
+- **Direct transfer:** presence and signaling over server-sent events (`/api/rtc/events`), then a WebRTC data channel between browsers.
 
 ## Limits
 
-- Signaling is kept in memory, so run a single server instance (the Railway default).
-- Search matches file and folder names, not file contents.
-- Encrypted file previews are limited to 1 GB; download larger ones instead.
-- The Electron desktop build (`DESKTOP_APP.md`, `electron.js`) is experimental and not currently working. Install the web app instead.
+- The switch opens the other location's page rather than swapping in place, because browsers block a secure `https://` page from calling an `http://` address on your home network.
+- Local addresses only work on the same Wi-Fi as the PC.
+- Signaling and the index live in memory, so run one server instance (the Railway default).
+- Search matches names, not file contents.
 
 ## Support
 

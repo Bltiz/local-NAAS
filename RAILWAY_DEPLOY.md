@@ -22,7 +22,7 @@ Open the service → **Variables** (not the project's *Shared Variables*, unless
 | Variable | Value |
 | --- | --- |
 | `NAS_PASSWORD` | A long password. Required: without it the site shows "No password is set" and stays locked. |
-| `UPLOAD_DIR` | `/data` |
+| `UPLOAD_DIR` | Optional. The attached volume is used automatically; set this only to use a different path. |
 
 Click **Deploy** on the "Apply changes" banner so the variables take effect.
 
@@ -47,5 +47,6 @@ Push to GitHub and Railway redeploys automatically. Files on the volume are kept
 | --- | --- |
 | Build log says `Node.js version ">=20.9.0" is required` | Make sure the latest code (with the Node 22 pin) is pushed, and the service's builder is Nixpacks. |
 | Site says "No password is set" | `NAS_PASSWORD` isn't set on the service itself, or the change wasn't deployed. |
-| Files disappear after a redeploy | The volume isn't attached at `/data`, or `UPLOAD_DIR` isn't `/data`. |
+| Files disappear after a redeploy | No volume is attached (the Storage panel shows a red warning), or `UPLOAD_DIR` points outside the volume. |
+| Upload summary says there isn't enough space | Grow the volume in its settings, or skip rebuildable folders. |
 | "Send directly" never connects | One of the networks blocks direct WebRTC connections. Use a cloud upload instead. |
