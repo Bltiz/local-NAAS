@@ -327,6 +327,7 @@ export default function Home() {
     else {
       const { trashId } = await res.json();
       toast.success(`Moved ${displayName(target.path)} to Trash`, {
+        duration: 10_000,
         action: {
           label: 'Undo',
           onClick: async () => {
