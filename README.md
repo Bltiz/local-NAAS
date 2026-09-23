@@ -80,6 +80,16 @@ Open http://localhost:43214.
 
 See [RAILWAY_DEPLOY.md](RAILWAY_DEPLOY.md). In short: deploy from GitHub, attach a volume, and set `NAS_PASSWORD` on the service. The volume is detected automatically. You can also set `UPLOAD_DIR` to its mount path.
 
+## Coming soon: other hosts
+
+Railway is the only hosting option documented and tested so far. Support for more places to run the server is planned:
+
+- **Docker:** an official image and a `docker-compose.yml`, so it runs on a home server, NAS box, or Raspberry Pi with one command.
+- **Any VPS:** step-by-step guides for providers like DigitalOcean, Hetzner, Linode, and Oracle Cloud, including HTTPS setup.
+- **Other platforms:** notes for services like Fly.io and Render.
+
+Until then, the app is a standard Node.js server (Node 20.9 or newer), so it can already run anywhere Node runs: `npm ci && npm run build && npm start`, with `NAS_PASSWORD` set and `UPLOAD_DIR` pointing at a folder on permanent storage. Put it behind HTTPS before exposing it to the internet.
+
 ## Settings
 
 | Variable | Where | Meaning |
