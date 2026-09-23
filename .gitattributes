@@ -1,1 +1,3 @@
 *.bat -text
+*.vbs -text
+*.ico binary

@@ -46,3 +46,6 @@ next-env.d.ts
 
 # Local NAS launcher settings (contains the local password)
 /local-nas.config.json
+
+# Local NAS tray app logs
+/logs
