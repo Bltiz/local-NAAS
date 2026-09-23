@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     // For local storage, serve the file directly
     const fileBuffer = await storage.download(filename);
 
-    return new NextResponse(fileBuffer, {
+    return new NextResponse(new Uint8Array(fileBuffer), {
       headers: {
         'Content-Disposition': `attachment; filename="${filename}"`,
         'Content-Type': 'application/octet-stream',

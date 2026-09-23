@@ -26,9 +26,14 @@ Files will be lost on restart, but it's free and easy to set up.
    - Share this URL to access from anywhere
 
 ### Limitations:
-- Files are deleted when the app restarts
-- Best for temporary file transfers
-- Free tier: 500 hours/month
+- Files are deleted when the app restarts or redeploys (unless you add a Volume, below)
+- Railway has no permanent free tier: new accounts get trial credit, then the Hobby plan is about $5/month
+
+### Keeping files with a Railway Volume (simplest)
+
+1. In your Railway service, right-click → **Attach Volume**, mount path `/data`
+2. Under **Variables**, add `UPLOAD_DIR=/data`
+3. Redeploy. Uploaded files now survive restarts.
 
 ## Option 2: Persistent Storage with S3
 

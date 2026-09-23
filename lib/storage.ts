@@ -2,7 +2,16 @@ import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, List
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { writeFile, readFile, unlink, readdir, stat, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { basename, join } from 'path';
+
+// Strips directory components so names like "../secret" can't escape the upload dir.
+function safeName(filename: string): string {
+  const name = basename(filename);
+  if (!name || name === '.' || name === '..') {
+    throw new Error('Invalid filename');
+  }
+  return name;
+}
 
 export interface FileInfo {
   name: string;
@@ -23,26 +32,26 @@ class LocalStorage implements StorageAdapter {
   private uploadDir: string;
 
   constructor() {
-    this.uploadDir = join(process.cwd(), 'uploads');
-    if (!existsSync(this.uploadDir)) {
-      mkdir(this.uploadDir, { recursive: true });
-    }
+    this.uploadDir = process.env.UPLOAD_DIR || join(process.cwd(), 'uploads');
   }
 
   async upload(file: File): Promise<void> {
+    if (!existsSync(this.uploadDir)) {
+      await mkdir(this.uploadDir, { recursive: true });
+    }
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    const filePath = join(this.uploadDir, file.name);
+    const filePath = join(this.uploadDir, safeName(file.name));
     await writeFile(filePath, buffer);
   }
 
   async download(filename: string): Promise<Buffer> {
-    const filePath = join(this.uploadDir, filename);
+    const filePath = join(this.uploadDir, safeName(filename));
     return await readFile(filePath);
   }
 
   async delete(filename: string): Promise<void> {
-    const filePath = join(this.uploadDir, filename);
+    const filePath = join(this.uploadDir, safeName(filename));
     await unlink(filePath);
   }
 
@@ -54,7 +63,7 @@ class LocalStorage implements StorageAdapter {
     const fileNames = await readdir(this.uploadDir);
     
     const filesWithDetails = await Promise.all(
-      fileNames.map(async (name) => {
+      fileNames.filter((name) => !name.startsWith('.')).map(async (name) => {
         const filePath = join(this.uploadDir, name);
         const stats = await stat(filePath);
         
