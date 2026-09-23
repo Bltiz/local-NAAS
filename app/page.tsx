@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { FolderPlus, FolderUp, HardDrive, Lock, LockOpen, LogOut, RefreshCw, Search, Trash2, Upload, UploadCloud, X } from 'lucide-react';
+import { FolderPlus, FolderUp, HardDrive, Lock, LockOpen, RefreshCw, Search, Trash2, Upload, UploadCloud, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { AccountMenu, type ViewerInfo } from '@/components/nas/account-menu';
 import { BackupPanel } from '@/components/nas/backup-panel';
 import { DevicesPanel } from '@/components/nas/devices-panel';
 import { EncryptionDialog } from '@/components/nas/encryption-dialog';
@@ -24,9 +25,12 @@ import { formatBytes } from '@/components/nas/format';
 import { type InstanceInfo, LocationSwitcher } from '@/components/nas/location-switcher';
 import { PlanDialog, type SpeedHistory } from '@/components/nas/plan-dialog';
 import { PreviewDialog } from '@/components/nas/preview-dialog';
+import { ShareDialog, SharedLinksDialog } from '@/components/nas/share-dialog';
 import { StoragePanel, type StorageInfo } from '@/components/nas/storage-panel';
 import { TrashDialog } from '@/components/nas/trash-dialog';
 import { UploadPanel } from '@/components/nas/upload-panel';
+import { UsersDialog } from '@/components/nas/users-dialog';
+import { VersionsDialog } from '@/components/nas/versions-dialog';
 import { EncryptionSession } from '@/lib/client/crypto';
 import {
   type FileEntry,
@@ -96,6 +100,11 @@ export default function Home() {
   const [dragActive, setDragActive] = useState(false);
   const dragDepth = useRef(0);
   const [passwordProtected, setPasswordProtected] = useState(false);
+  const [viewer, setViewer] = useState<ViewerInfo | null>(null);
+  const [shareEntry, setShareEntry] = useState<FileEntry | null>(null);
+  const [versionsEntry, setVersionsEntry] = useState<FileEntry | null>(null);
+  const [usersOpen, setUsersOpen] = useState(false);
+  const [linksOpen, setLinksOpen] = useState(false);
   const [direct, setDirect] = useState<DirectShare | null>(null);
   const filesInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -168,7 +177,10 @@ export default function Home() {
       .catch((error) => setLoadError(error instanceof Error ? error.message : 'Could not load your files.'));
     fetch('/api/auth-status')
       .then((res) => res.json())
-      .then((data) => setPasswordProtected(data.mode === 'protected'))
+      .then((data) => {
+        setPasswordProtected(data.mode === 'protected');
+        setViewer(data.viewer);
+      })
       .catch(() => {});
     fetch('/api/instance', { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : null))
@@ -418,18 +430,16 @@ export default function Home() {
               {session ? <LockOpen /> : <Lock />}
               <span className="hidden sm:inline">{session ? (encryptUploads ? 'Encrypting uploads' : 'Unlocked') : 'Encryption'}</span>
             </Button>
-            {passwordProtected && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={async () => {
-                  await fetch('/api/logout', { method: 'POST' });
-                  signOutRedirect();
-                }}
-              >
-                <LogOut /> <span className="hidden sm:inline">Sign out</span>
-              </Button>
-            )}
+            <AccountMenu
+              viewer={viewer}
+              canSignOut={passwordProtected}
+              onUsers={() => setUsersOpen(true)}
+              onLinks={() => setLinksOpen(true)}
+              onSignOut={async () => {
+                await fetch('/api/logout', { method: 'POST' });
+                signOutRedirect();
+              }}
+            />
           </div>
         </div>
       </header>
@@ -475,6 +485,8 @@ export default function Home() {
             onDownload={(entry) => withUnlock((s) => downloadFile(entry, s))}
             onDownloadFolder={onDownloadFolder}
             onDelete={setDeleteTarget}
+            onShare={setShareEntry}
+            onVersions={setVersionsEntry}
           />
           {!supportsFolderSave() && entries?.some((e) => e.type === 'dir') && (
             <p className="mt-3 text-xs text-muted-foreground">
@@ -484,7 +496,7 @@ export default function Home() {
         </section>
 
         <aside className="flex min-w-0 flex-col gap-6">
-          {instance?.self.mode === 'local' && <BackupPanel defaultFolder={instance.self.name} />}
+          {instance?.self.mode === 'local' && viewer?.role === 'admin' && <BackupPanel defaultFolder={instance.self.name} />}
           <DevicesPanel
             snapshot={directSnapshot}
             onSend={sendDirect}
@@ -546,6 +558,10 @@ export default function Home() {
       />
 
       <TrashDialog open={trashOpen} onOpenChange={setTrashOpen} onChanged={() => loadEntries(true)} />
+      <ShareDialog entry={shareEntry} onClose={() => setShareEntry(null)} />
+      <SharedLinksDialog open={linksOpen} onOpenChange={setLinksOpen} />
+      <VersionsDialog entry={versionsEntry} onClose={() => setVersionsEntry(null)} onRestored={() => loadEntries(true)} />
+      <UsersDialog open={usersOpen} onOpenChange={setUsersOpen} />
 
       <PreviewDialog
         entry={preview}

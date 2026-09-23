@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { HardDrive, Lock, Loader2, AlertTriangle } from 'lucide-react';
+import { HardDrive, Lock, Loader2, AlertTriangle, UserRound } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,7 +9,9 @@ import { Input } from '@/components/ui/input';
 type Mode = 'open' | 'protected' | 'misconfigured' | null;
 
 export default function LoginPage() {
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [hasUsers, setHasUsers] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [mode, setMode] = useState<Mode>(null);
@@ -22,6 +24,7 @@ export default function LoginPage() {
           window.location.replace('/');
         } else {
           setMode(data.mode);
+          setHasUsers(Boolean(data.hasUsers));
         }
       })
       .catch(() => setMode('protected'));
@@ -36,7 +39,7 @@ export default function LoginPage() {
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ username, password }),
       });
       if (res.ok) {
         window.location.replace('/');
@@ -82,12 +85,26 @@ export default function LoginPage() {
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
+              {hasUsers && (
+                <div className="relative">
+                  <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <Input
+                    autoComplete="username"
+                    autoCapitalize="none"
+                    autoFocus
+                    placeholder="Username (empty for admin)"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="h-10 pl-9 bg-slate-900/50 border-slate-700 text-white"
+                  />
+                </div>
+              )}
               <div className="relative">
                 <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                 <Input
                   type="password"
                   autoComplete="current-password"
-                  autoFocus
+                  autoFocus={!hasUsers}
                   placeholder="Password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}

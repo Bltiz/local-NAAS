@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { ChevronRight, Download, Eye, FolderDown, Home, Lock, MoreVertical, RefreshCw, Search, Trash2, UploadCloud } from 'lucide-react';
+import { ChevronRight, Download, Eye, FolderDown, History, Home, Link2, Lock, MoreVertical, RefreshCw, Search, Trash2, UploadCloud } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -31,9 +31,11 @@ interface Props {
   onDownload: (entry: FileEntry) => void;
   onDownloadFolder: (entry: FileEntry) => void;
   onDelete: (entry: FileEntry) => void;
+  onShare: (entry: FileEntry) => void;
+  onVersions: (entry: FileEntry) => void;
 }
 
-export function FileBrowser({ entries, error, dir, query, onOpenDir, onRetry, onPreview, onDownload, onDownloadFolder, onDelete }: Props) {
+export function FileBrowser({ entries, error, dir, query, onOpenDir, onRetry, onPreview, onDownload, onDownloadFolder, onDelete, onShare, onVersions }: Props) {
   const folderStats = useMemo(() => {
     const stats = new Map<string, { items: number; bytes: number }>();
     for (const e of entries ?? []) {
@@ -185,8 +187,14 @@ export function FileBrowser({ entries, error, dir, query, onOpenDir, onRetry, on
                           <DropdownMenuItem onClick={() => onDownload(entry)}>
                             <Download /> Download
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => onVersions(entry)}>
+                            <History /> Version history
+                          </DropdownMenuItem>
                         </>
                       )}
+                      <DropdownMenuItem onClick={() => onShare(entry)}>
+                        <Link2 /> Share link…
+                      </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem variant="destructive" onClick={() => onDelete(entry)}>
                         <Trash2 /> Delete
